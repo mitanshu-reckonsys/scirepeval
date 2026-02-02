@@ -48,7 +48,7 @@ class SciRepTrain(pl.LightningModule):
                  log_dir: str,
                  use_ctrl_tokens=False,
                  task_dict: Dict[str, TaskFamily] = None,
-                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False):
+                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False):
         super().__init__()
         self.task_dict = load_tasks() if not task_dict else task_dict
         print(self.task_dict.keys())
@@ -66,6 +66,7 @@ class SciRepTrain(pl.LightningModule):
         self.pals = pals_cfg is not None
         self.adapters = adapter_type is not None
         self.use_ctrl_tokens = use_ctrl_tokens
+        self.use_last_token = use_last_token
         spl_ctrl_tokens = set()
         for t in self.task_dict.values():
             if type(t.ctrl_token) == str:
@@ -100,14 +101,23 @@ class SciRepTrain(pl.LightningModule):
         self.save_hyperparameters(ignore=["task_dict"])
         self.use_prompts = use_prompts
 
-
     def forward(self, input_ids, attention_mask=None, token_idx=0, task_id=None):
         if not self.pals:
             embedding = self.encoder(input_ids, attention_mask=attention_mask) if not self.adapters else self.encoder(
                 input_ids,
                 attention_mask=attention_mask,
                 task_id=task_id)
-            return embedding.last_hidden_state[:, token_idx, :]
+            if self.use_last_token:
+                # Last token pooling (matching Qwen3-Embedding)
+                sequence_lengths = attention_mask.sum(dim=1) - 1
+                batch_size = embedding.last_hidden_state.shape[0]
+                return embedding.last_hidden_state[
+                    torch.arange(batch_size, device=embedding.last_hidden_state.device),
+                    sequence_lengths,
+                ]
+            else:
+                # Original CLS/position-based pooling
+                return embedding.last_hidden_state[:, token_idx, :]
         else:
             embedding = self.encoder(input_ids, attention_mask=attention_mask, task_id=task_id)
             return embedding[:, token_idx, :]
@@ -161,14 +171,39 @@ class SciRepTrain(pl.LightningModule):
                 if type(task_id) == dict:
                     query_ctrl = task_id["query"]
                     cand_ctrl = task_id["candidates"]
-                query_emb, pos_emb, neg_emb = self(query['input_ids'], query['attention_mask'], idx, query_ctrl), self(
-                    pos['input_ids'], pos['attention_mask'], idx, cand_ctrl), self(neg['input_ids'],
-                                                                                   neg['attention_mask'], idx,
-                                                                                   cand_ctrl)
+                query_emb, pos_emb, neg_emb = (
+                    self(
+                        query["input_ids"],
+                        attention_mask=query["attention_mask"],
+                        token_idx=idx,
+                        task_id=query_ctrl,
+                        use_last_token=self.use_last_token,
+                    ),
+                    self(
+                        pos["input_ids"],
+                        attention_mask=pos["attention_mask"],
+                        token_idx=idx,
+                        task_id=cand_ctrl,
+                        use_last_token=self.use_last_token,
+                    ),
+                    self(
+                        neg["input_ids"],
+                        attention_mask=neg["attention_mask"],
+                        token_idx=idx,
+                        task_id=cand_ctrl,
+                        use_last_token=self.use_last_token,
+                    ),
+                )
                 curr_loss = task.loss(query_emb, pos_emb, neg_emb)
             else:
                 x, y = batch[0], batch[1]
-                encoding = self(x['input_ids'], x['attention_mask'], idx, task_id)
+                encoding = self(
+                    x["input_ids"],
+                    attention_mask=x["attention_mask"],
+                    token_idx=idx,
+                    task_id=task_id,
+                    use_last_token=self.use_last_token,
+                )
                 logits = self.heads[name](encoding)
                 if task.type == "regression":
                     logits = logits.squeeze()
@@ -300,6 +335,7 @@ if __name__ == '__main__':
     parser.add_argument('--limit-train-batches', default=None, type=int, help='Number of training batches to limit to.')
     parser.add_argument('--limit-val-batches', default=None, type=int, help='Number of validation batches to limit to.')
     parser.add_argument('--checkpoint-n-steps', default=100, type=int, help='How often to save checkpoints in number of effective batches.')
+    parser.add_argument('--use-last-token', default=False, action='store_true', help='Whether to use last token for pooling.')
 
     args = parser.parse_args()
     mconfig = AutoConfig.from_pretrained(args.model)
