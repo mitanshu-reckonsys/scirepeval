@@ -176,22 +176,19 @@ class SciRepTrain(pl.LightningModule):
                         query["input_ids"],
                         attention_mask=query["attention_mask"],
                         token_idx=idx,
-                        task_id=query_ctrl,
-                        use_last_token=self.use_last_token,
+                        task_id=query_ctrl
                     ),
                     self(
                         pos["input_ids"],
                         attention_mask=pos["attention_mask"],
                         token_idx=idx,
-                        task_id=cand_ctrl,
-                        use_last_token=self.use_last_token,
+                        task_id=cand_ctrl
                     ),
                     self(
                         neg["input_ids"],
                         attention_mask=neg["attention_mask"],
                         token_idx=idx,
-                        task_id=cand_ctrl,
-                        use_last_token=self.use_last_token,
+                        task_id=cand_ctrl
                     ),
                 )
                 curr_loss = task.loss(query_emb, pos_emb, neg_emb)
@@ -201,8 +198,7 @@ class SciRepTrain(pl.LightningModule):
                     x["input_ids"],
                     attention_mask=x["attention_mask"],
                     token_idx=idx,
-                    task_id=task_id,
-                    use_last_token=self.use_last_token,
+                    task_id=task_id
                 )
                 logits = self.heads[name](encoding)
                 if task.type == "regression":
