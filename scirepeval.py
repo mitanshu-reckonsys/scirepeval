@@ -177,6 +177,7 @@ if __name__ == "__main__":
     parser.add_argument('--mtype', help='Model variant to be used (default, pals, adapters, fusion)', default="default")
     parser.add_argument('--gpt3-model', help='Name of embedding model in case of using openai api', default=None)
     parser.add_argument('--model', '-m', help='HuggingFace model to be used')
+    parser.add_argument('--checkpoint', help='Path to PyTorch checkpoint file', default=None)
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--ctrl-tokens', action='store_true', default=False, help='use control codes for tasks')
     parser.add_argument('--adapters-dir', help='path to the adapter checkpoints', default=None)
@@ -203,7 +204,7 @@ if __name__ == "__main__":
             if not args.prompt_file or not os.path.exists(args.prompt_file):
                 raise ValueError("Instructor model requires JSON file with prompts to use.")
             task_prompts = load_prompts_from_file(args.prompt_file, args.prompt_name)
-            model = model_class_map[args.model_type](args.model, task_prompts)
+            model = model_class_map[args.model_type](args.model, task_prompts, ckpt_path=args.checkpoint)
     else:
         model = Model(
             variant=args.mtype,

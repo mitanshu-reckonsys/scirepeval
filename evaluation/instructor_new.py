@@ -239,7 +239,7 @@ class PromptFormatter:
 
 class InstructorEmbeddingModel(ABC):
 
-    def __init__(self, embed_model: str, model_type: str, task_prompts: Dict[str, str], eos_token: str = None):
+    def __init__(self, embed_model: str, model_type: str, task_prompts: Dict[str, str], eos_token: str = None, ckpt_path = None):
         is_compatible, error_msg = _check_version_compatibility(model_type)
         if not is_compatible:
             raise ValueError(error_msg)
@@ -278,7 +278,7 @@ class InstructorEmbeddingModel(ABC):
 
 class GemmaModel(InstructorEmbeddingModel):
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str]):
+    def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None):
         super().__init__(embed_model, "gemma", task_prompts)
 
         self.encoder = SentenceTransformer(self.embed_model)
@@ -303,11 +303,21 @@ class GemmaModel(InstructorEmbeddingModel):
 
 class Qwen3Model(InstructorEmbeddingModel):
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str]):
+    def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None):
         super().__init__(embed_model, "qwen3", task_prompts)
 
         self.encoder = SentenceTransformer(embed_model)
         self.tokenizer = AutoTokenizer.from_pretrained(self.embed_model)
+
+        if ckpt_path:
+            import torch
+            checkpoint = torch.load(ckpt_path, map_location='cuda')
+            encoder_state = {k.replace('encoder.', ''): v 
+                           for k, v in checkpoint['state_dict'].items() 
+                           if k.startswith('encoder.')}
+            self.encoder[0].auto_model.load_state_dict(encoder_state)
+            
+        self.encoder.max_seq_length = 512
         self._setup_tokenizer_sep_token(self.tokenizer)
         self.formatter = PromptFormatter(task_prompts)
 
@@ -330,7 +340,7 @@ class Qwen3Model(InstructorEmbeddingModel):
 
 class F2LLMModel(InstructorEmbeddingModel):
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str]):
+    def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None):
         super().__init__(embed_model, "f2llm", task_prompts)
 
         # Load model and tokenizer using transformers
@@ -386,7 +396,7 @@ class F2LLMModel(InstructorEmbeddingModel):
 
 class GritLMModel(InstructorEmbeddingModel):
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str]):
+    def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None):
         super().__init__(embed_model, "gritlm", task_prompts)
 
         if not GRITLM_AVAILABLE:
