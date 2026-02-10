@@ -311,10 +311,9 @@ class Qwen3Model(InstructorEmbeddingModel):
 
         if ckpt_path:
             import torch
-            checkpoint = torch.load(ckpt_path, map_location='cuda')
-            encoder_state = {k.replace('encoder.', ''): v 
-                           for k, v in checkpoint['state_dict'].items() 
-                           if k.startswith('encoder.')}
+            checkpoint = torch.load(ckpt_path, map_location='cuda', weights_only=False)
+            # Only extract encoder state_dict - ignore scheduler and other training state
+            encoder_state = {k.replace('encoder.', ''): v for k, v in checkpoint['state_dict'].items() if k.startswith('encoder.')}
             self.encoder[0].auto_model.load_state_dict(encoder_state)
             
         self.encoder.max_seq_length = 512
