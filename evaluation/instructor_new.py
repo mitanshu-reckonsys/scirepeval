@@ -7,6 +7,7 @@ import warnings
 from string import Formatter
 import json
 from copy import deepcopy
+import schedulers
 
 # Lazy import for optional dependencies
 try:
