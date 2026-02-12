@@ -11,7 +11,8 @@ import gc
 import torch
 import sys
 import os
-_training_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'training')
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_training_dir = os.path.join(_script_dir, 'training')
 sys.path.insert(0, _training_dir)
 import schedulers
 
