@@ -9,6 +9,11 @@ from evaluation.few_shot_evaluator import FewShotEvaluator
 from evaluation.gpt3_encoder import GPT3Model
 import gc
 import torch
+import sys
+import os
+_training_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'training')
+sys.path.insert(0, _training_dir)
+import schedulers
 
 # Import appropriate instructor model based on transformers version
 def _get_transformers_version():

@@ -7,6 +7,7 @@ import warnings
 from string import Formatter
 import json
 from copy import deepcopy
+from training import schedulers
 from training.schedulers import InverseSquareRootSchedule, InverseSquareRootScheduleConfig
 
 # Lazy import for optional dependencies
