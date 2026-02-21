@@ -143,24 +143,36 @@ class SciRepTrain(pl.LightningModule):
 
         self.opt = optimizer
 
+        # Calculate total training steps first (needed for all schedulers)
+        try:
+            # Try using trainer's estimate (works for non-streaming datasets)
+            estimated_steps = self.trainer.estimated_stepping_batches
+            self.log("config/estimated_stepping_batches", float(estimated_steps) if estimated_steps else 0.0, on_epoch=False, on_step=False)
+            # If estimated_stepping_batches is 0 or None, fall back to manual calculation
+            if not estimated_steps or estimated_steps <= 0:
+                raise RuntimeError("estimated_stepping_batches is 0 or None")
+            total_steps = estimated_steps
+        except (AttributeError, RuntimeError):
+            # Fallback for streaming datasets: calculate from sample sizes
+            # total_steps = sum(sample_sizes) / (batch_size * grad_accum * num_gpus) * epochs
+            total_samples = sum(
+                task.sample_size.get('train', task.sample_size) if isinstance(task.sample_size, dict) else task.sample_size
+                for task in self.task_dict.values()
+            )
+            steps_per_epoch = total_samples // (self.batch_size * self.trainer.accumulate_grad_batches * self.trainer.num_devices)
+            total_steps = steps_per_epoch * self.trainer.max_epochs
+
         # Calculate warmup steps (supports both absolute number and proportion)
         # If warmup_steps < 1, treat as proportion; otherwise treat as absolute steps
         if self.warmup_steps < 1:
-            try:
-                # Try using trainer's estimate (works for non-streaming datasets)
-                total_steps = self.trainer.estimated_stepping_batches
-            except (AttributeError, RuntimeError):
-                # Fallback for streaming datasets: calculate from sample sizes
-                # total_steps = sum(sample_sizes) / (batch_size * grad_accum * num_gpus) * epochs
-                total_samples = sum(
-                    task.sample_size.get('train', task.sample_size) if isinstance(task.sample_size, dict) else task.sample_size
-                    for task in self.task_dict.values()
-                )
-                steps_per_epoch = total_samples // (self.batch_size * self.trainer.accumulate_grad_batches * self.trainer.num_devices)
-                total_steps = steps_per_epoch * self.trainer.max_epochs
             warmup_steps = int(self.warmup_steps * total_steps)
         else:
             warmup_steps = int(self.warmup_steps)
+
+        # Log scheduler configuration
+        self.log("config/total_steps", float(total_steps), on_epoch=False, on_step=False)
+        self.log("config/warmup_steps", float(warmup_steps), on_epoch=False, on_step=False)
+        self.log("config/init_lr", self.init_lr, on_epoch=False, on_step=False)
 
         if self.pals or self.adapters:
             # Linear schedule uses optimizer's lr (init_lr), peak_lr not used
