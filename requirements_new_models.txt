@@ -32,6 +32,10 @@ gritlm==1.0.2
 pytorch-lightning>=2.0.0
 torchmetrics>=1.0.0
 
+# Swift framework for training
+ms-swift==3.10.0  # For Qwen3-Embedding training
+msgspec>=0.18.0  # Required by Swift RLHF trainer
+
 # NOTE: adapters package is NOT included in this environment
 # It is incompatible with transformers>=4.51
 # If you need adapter models, use requirements_old_models.txt instead
