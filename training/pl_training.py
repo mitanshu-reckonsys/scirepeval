@@ -147,7 +147,7 @@ class SciRepTrain(pl.LightningModule):
         try:
             # Try using trainer's estimate (works for non-streaming datasets)
             estimated_steps = self.trainer.estimated_stepping_batches
-            self.log("config/estimated_stepping_batches", float(estimated_steps) if estimated_steps else 0.0, on_epoch=False, on_step=False)
+            self.logger.log_hyperparams({"estimated_stepping_batches": float(estimated_steps) if estimated_steps else 0.0})
             # If estimated_stepping_batches is 0 or None, fall back to manual calculation
             if not estimated_steps or estimated_steps <= 0:
                 raise RuntimeError("estimated_stepping_batches is 0 or None")
@@ -170,13 +170,12 @@ class SciRepTrain(pl.LightningModule):
             warmup_steps = int(self.warmup_steps)
 
         # Log scheduler configuration
-        self.log("config/total_steps", float(total_steps), on_epoch=False, on_step=False)
-        self.log("config/warmup_steps", float(warmup_steps), on_epoch=False, on_step=False)
-        self.log("config/init_lr", self.init_lr, on_epoch=False, on_step=False)
+        
 
         if self.pals or self.adapters:
             # Linear schedule uses optimizer's lr (init_lr), peak_lr not used
             scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+            self.logger.log_hyperparams(dict(scheduler_type="linear", num_warmup_steps=warmup_steps, num_training_steps=total_steps))
         elif self.use_prompts:
             # Use cosine schedule for instruction-aware training (Qwen3-Embedding best practice)
             # Cosine schedule uses optimizer's lr (init_lr), peak_lr not used
@@ -186,12 +185,14 @@ class SciRepTrain(pl.LightningModule):
                 num_warmup_steps=warmup_steps,
                 num_training_steps=total_steps
             )
+            self.logger.log_hyperparams(dict(scheduler_type="cosine", num_warmup_steps=warmup_steps, num_training_steps=total_steps))
         else:
             # InverseSquareRootSchedule uses both init_lr and peak_lr
             scheduler_config = InverseSquareRootScheduleConfig(warmup_updates=warmup_steps,
                                                                warmup_init_lr=self.init_lr,
                                                                lr=self.peak_lr)
             scheduler = InverseSquareRootSchedule(scheduler_config, optimizer)
+            self.logger.log_hyperparams(dict(scheduler_type="inverse_square_root", warmup_updates=warmup_steps, warmup_init_lr=self.init_lr, lr=self.peak_lr))
 
         return {
             "optimizer": optimizer,
