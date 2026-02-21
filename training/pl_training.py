@@ -11,7 +11,7 @@ import torch
 import torch.nn
 from torch.distributed import ReduceOp
 from torch.utils.data import DataLoader
-from transformers import get_linear_schedule_with_warmup
+from transformers import get_linear_schedule_with_warmup, get_cosine_schedule_with_warmup
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 
 from adapter_fusion import AdapterFactory
@@ -142,10 +142,41 @@ class SciRepTrain(pl.LightningModule):
         )
 
         self.opt = optimizer
-        if self.pals or self.adapters:
-            scheduler = get_linear_schedule_with_warmup(optimizer, self.warmup_steps, 77500)
+
+        # Calculate warmup steps (supports both absolute number and proportion)
+        # If warmup_steps < 1, treat as proportion; otherwise treat as absolute steps
+        if self.warmup_steps < 1:
+            try:
+                # Try using trainer's estimate (works for non-streaming datasets)
+                total_steps = self.trainer.estimated_stepping_batches
+            except (AttributeError, RuntimeError):
+                # Fallback for streaming datasets: calculate from sample sizes
+                # total_steps = sum(sample_sizes) / (batch_size * grad_accum * num_gpus) * epochs
+                total_samples = sum(
+                    task.sample_size.get('train', task.sample_size) if isinstance(task.sample_size, dict) else task.sample_size
+                    for task in self.task_dict.values()
+                )
+                steps_per_epoch = total_samples // (self.batch_size * self.trainer.accumulate_grad_batches * self.trainer.num_devices)
+                total_steps = steps_per_epoch * self.trainer.max_epochs
+            warmup_steps = int(self.warmup_steps * total_steps)
         else:
-            scheduler_config = InverseSquareRootScheduleConfig(warmup_updates=self.warmup_steps,
+            warmup_steps = int(self.warmup_steps)
+
+        if self.pals or self.adapters:
+            # Linear schedule uses optimizer's lr (init_lr), peak_lr not used
+            scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+        elif self.use_prompts:
+            # Use cosine schedule for instruction-aware training (Qwen3-Embedding best practice)
+            # Cosine schedule uses optimizer's lr (init_lr), peak_lr not used
+            # Warmup: 0 → init_lr, then cosine decay: init_lr → ~0.1 * init_lr
+            scheduler = get_cosine_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=total_steps
+            )
+        else:
+            # InverseSquareRootSchedule uses both init_lr and peak_lr
+            scheduler_config = InverseSquareRootScheduleConfig(warmup_updates=warmup_steps,
                                                                warmup_init_lr=self.init_lr,
                                                                lr=self.peak_lr)
             scheduler = InverseSquareRootSchedule(scheduler_config, optimizer)
@@ -318,7 +349,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=16, help='batch size')
     parser.add_argument('--lr', type=float, default=1e-4, help='initial learning rate')
     parser.add_argument('--peak-lr', type=float, default=5e-5, help='initial learning rate')
-    parser.add_argument('--warmup', type=int, default=700, help='number of warmup steps')
+    parser.add_argument('--warmup', type=float, default=700, help='warmup steps (absolute number if >= 1, proportion of total if < 1, e.g., 0.03 for 3%%)')
     parser.add_argument('--epochs', type=int, default=2, help='number of epochs')
     parser.add_argument('--grad-accum', type=int, default=8, help='grad accumulation steps')
     parser.add_argument('--ctrl-tokens', action='store_true', default=False, help='use control codes for tasks')
