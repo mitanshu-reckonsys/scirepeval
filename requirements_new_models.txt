@@ -25,16 +25,9 @@ pyarrow==12.0.1
 # Sentence transformers - SPECIFIC VERSION for Gemma compatibility
 sentence-transformers==5.1.0  # Required for Gemma
 
-# GritLM support
-gritlm==1.0.2
-
 # PyTorch Lightning - updated version
 pytorch-lightning>=2.0.0
 torchmetrics>=1.0.0
-
-# Swift framework for training
-ms-swift==3.10.0  # For Qwen3-Embedding training
-msgspec>=0.18.0  # Required by Swift RLHF trainer
 
 # NOTE: adapters package is NOT included in this environment
 # It is incompatible with transformers>=4.51
