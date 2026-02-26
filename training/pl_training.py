@@ -12,7 +12,7 @@ import torch
 import torch.nn
 from torch.distributed import ReduceOp
 from torch.utils.data import DataLoader
-from transformers import get_linear_schedule_with_warmup, get_cosine_schedule_with_warmup
+from transformers import get_linear_schedule_with_warmup, get_cosine_schedule_with_warmup, get_cosine_with_min_lr_schedule_with_warmup
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 
 from adapter_fusion import AdapterFactory
@@ -49,7 +49,7 @@ class SciRepTrain(pl.LightningModule):
                  log_dir: str,
                  use_ctrl_tokens=False,
                  task_dict: Dict[str, TaskFamily] = None,
-                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False):
+                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False, use_cosine_schedule=False):
         super().__init__()
         self.task_dict = load_tasks() if not task_dict else task_dict
         print(self.task_dict.keys())
@@ -103,6 +103,7 @@ class SciRepTrain(pl.LightningModule):
         self.use_prompts = use_prompts
         self.val_losses = []
         self.task_val_losses = defaultdict(list)
+        self.use_cosine_schedule = use_cosine_schedule
 
     def forward(self, input_ids, attention_mask=None, token_idx=0, task_id=None):
         if not self.pals:
@@ -179,14 +180,15 @@ class SciRepTrain(pl.LightningModule):
             # Linear schedule uses optimizer's lr (init_lr), peak_lr not used
             scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
             self.logger.log_hyperparams(dict(scheduler_type="linear", num_warmup_steps=warmup_steps, num_training_steps=total_steps))
-        elif self.use_prompts:
+        elif self.use_cosine_schedule:
             # Use cosine schedule for instruction-aware training (Qwen3-Embedding best practice)
             # Cosine schedule uses optimizer's lr (init_lr), peak_lr not used
             # Warmup: 0 → init_lr, then cosine decay: init_lr → ~0.1 * init_lr
-            scheduler = get_cosine_schedule_with_warmup(
+            scheduler = get_cosine_with_min_lr_schedule_with_warmup(
                 optimizer,
                 num_warmup_steps=warmup_steps,
-                num_training_steps=total_steps
+                num_training_steps=total_steps,
+                min_lr_rate=0.1
             )
             self.logger.log_hyperparams(dict(scheduler_type="cosine", num_warmup_steps=warmup_steps, num_training_steps=total_steps))
         else:
@@ -389,6 +391,7 @@ if __name__ == '__main__':
     parser.add_argument('--limit-val-batches', default=None, type=int, help='Number of validation batches to limit to.')
     parser.add_argument('--checkpoint-n-steps', default=100, type=int, help='How often to save checkpoints in number of effective batches.')
     parser.add_argument('--use-last-token', default=False, action='store_true', help='Whether to use last token for pooling.')
+    parser.add_argument('--use-cosine-schedule', default=False, action='store_true', help='Whether to use cosine decay for the learning rate scheduler. Defaults to inverse square root scheduler if False and not adapters or pals.')
 
     args = parser.parse_args()
     mconfig = AutoConfig.from_pretrained(args.model)
@@ -426,7 +429,8 @@ if __name__ == '__main__':
                         warmup_steps=args.warmup,
                         use_ctrl_tokens=args.ctrl_tokens, task_dict=tasks_dict, pals_cfg=args.pals_config,
                         adapter_type=args.adapter_type, log_dir=filepath, max_len=args.max_len,
-                        load_adapters_as=args.adapters_chkpt, use_prompts=args.instr_prompts, use_last_token=args.use_last_token)
+                        load_adapters_as=args.adapters_chkpt, use_prompts=args.instr_prompts, use_last_token=args.use_last_token, 
+                        use_cosine_schedule=args.use_cosine_schedule)
 
     hparams = {"accelerator": "gpu" if args.gpu else "cpu", "devices": args.gpu if args.gpu else "auto",
                "val_check_interval": args.val_check_interval, "num_sanity_val_steps": 4,
