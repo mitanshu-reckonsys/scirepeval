@@ -395,6 +395,60 @@ class F2LLMModel(InstructorEmbeddingModel):
         return self._encode_batch(formatted_batch)
 
 
+class Voyage4Model(InstructorEmbeddingModel):
+    """
+    Voyage4 nano model wrapper.
+
+    Note: This is NOT an instruction-following model like Qwen3/Gemma.
+    It uses built-in prompts via encode_query() and encode_document() methods.
+    The task_prompts parameter is ignored - Voyage4 uses its own internal prompts.
+    """
+
+    def __init__(self, embed_model: str, task_prompts: Dict[str, str] = None, ckpt_path: str = None):
+        # Note: task_prompts is accepted for API compatibility but not used
+        super().__init__(embed_model, "voyage4", task_prompts or {})
+
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            raise ImportError(
+                "Voyage4 requires sentence-transformers to be installed. "
+                "Please install: pip install sentence-transformers"
+            )
+
+        self.encoder = SentenceTransformer(embed_model, trust_remote_code=True)
+        self.encoder.max_seq_length = 512
+        self.tokenizer = self.encoder.tokenizer
+        self._setup_tokenizer_sep_token(self.tokenizer)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    def _encode_batch(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
+        """
+        Encode batch using Voyage4's built-in query/document prompts.
+
+        For search tasks, uses encode_query for queries and encode_document for candidates.
+        For other tasks, uses encode_document for all inputs.
+        """
+        is_search_task = isinstance(self.task_id, dict)
+
+        if is_search_task and batch_ids:
+            # Mixed batch: queries and documents
+            embeddings = []
+            for i, (_, batch_type) in enumerate(batch_ids):
+                text = batch[i]
+                if batch_type == QUERY_TYPE:
+                    emb = self.encoder.encode_query(text, convert_to_tensor=True, device=self.device)
+                else:
+                    emb = self.encoder.encode_document(text, convert_to_tensor=True, device=self.device)
+                embeddings.append(emb)
+            return torch.stack(embeddings)
+        else:
+            # Single type batch: use encode_document for all
+            return self.encoder.encode_document(batch, convert_to_tensor=True, device=self.device)
+
+    def __call__(self, batch: List[str], batch_ids: Optional[List] = None):
+        batch = self._replace_sep_placeholder(batch)
+        return self._encode_batch(batch, batch_ids)
+
+
 class GritLMModel(InstructorEmbeddingModel):
 
     def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None):

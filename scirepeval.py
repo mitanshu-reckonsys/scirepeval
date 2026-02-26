@@ -29,7 +29,7 @@ def _get_transformers_version():
 _transformers_version = _get_transformers_version()
 if _transformers_version >= (4, 51):
     # Newer transformers: can use new models
-    from evaluation.instructor_new import GemmaModel, Qwen3Model, GritLMModel, F2LLMModel, load_prompts_from_file
+    from evaluation.instructor_new import GemmaModel, Qwen3Model, GritLMModel, F2LLMModel, Voyage4Model, load_prompts_from_file
     InstructorModel = None
     NEW_MODELS_AVAILABLE = True
 else:
@@ -40,6 +40,7 @@ else:
     Qwen3Model = None
     GritLMModel = None
     F2LLMModel = None
+    Voyage4Model = None
 
 from reviewer_matching import ReviewerMatchingEvaluator
 from evaluation.eval_datasets import SimpleDataset, IRDataset
@@ -48,7 +49,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 TASK_IDS = {"classification": "[CLF]", "regression": "[RGN]", "proximity": "[PRX]",
             "adhoc_search": {"query": "[QRY]", "candidates": "[PRX]"}}
-model_class_map = {"gemma": GemmaModel, "qwen3": Qwen3Model, "gritlm": GritLMModel, "f2llm": F2LLMModel}
+model_class_map = {"gemma": GemmaModel, "qwen3": Qwen3Model, "gritlm": GritLMModel, "f2llm": F2LLMModel, "voyage4": Voyage4Model}
 
 import pytorch_lightning as pl
 
@@ -206,6 +207,9 @@ if __name__ == "__main__":
     elif args.instructor:
         if args.model_type == "instr":
             model = InstructorModel(args.model)
+        elif args.model_type == "voyage4":
+            # Voyage4 uses built-in prompts, doesn't need prompt file
+            model = model_class_map[args.model_type](args.model, ckpt_path=args.checkpoint)
         else:
             if not args.prompt_file or not os.path.exists(args.prompt_file):
                 raise ValueError("Instructor model requires JSON file with prompts to use.")
