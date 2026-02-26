@@ -286,7 +286,7 @@ class SciRepTrain(pl.LightningModule):
                          batch_size=self.batch_size, rank_zero_only=True)
             self.log("val_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
             self.val_losses.append(loss.detach())
-            self.log("avg_val_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=self.batch_size)
+            #self.log("avg_val_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=self.batch_size)
             return {"val_loss": loss}
         except Exception as e:
             import traceback
