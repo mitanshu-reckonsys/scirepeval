@@ -280,12 +280,12 @@ class SciRepTrain(pl.LightningModule):
             dist_loss_per_task = loss_per_task.clone().data
             dist_loss_per_task = sync_ddp_if_available(dist_loss_per_task, reduce_op=ReduceOp.SUM)
             for task in self.task_dict:
-                self.task_val_losses[task].append(dist_loss_per_task[self.task_idx[task]])
+                self.task_val_losses[task].append(dist_loss_per_task[self.task_idx[task]].detach())
                 self.log(f"val_loss_{task}", dist_loss_per_task[self.task_idx[task]], on_step=True, on_epoch=True,
                          prog_bar=False,
                          batch_size=self.batch_size, rank_zero_only=True)
             self.log("val_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-            self.val_losses.append(loss)
+            self.val_losses.append(loss.detach())
             self.log("avg_val_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=self.batch_size)
             return {"val_loss": loss}
         except Exception as e:
@@ -295,11 +295,14 @@ class SciRepTrain(pl.LightningModule):
             raise
 
     def on_validation_epoch_end(self):
-        avg_val_loss = torch.sum(self.val_losses)/float(len(self.val_losses))
-        self.log("avg_val_loss", avg_val_loss)
+    
+        avg_loss = torch.stack(self.val_losses).mean()
+        avg_loss = self.all_gather(avg_loss).mean() 
+        self.log("avg_val_loss", avg_loss)
         for task, losses in self.task_val_losses.items():
-            avg_loss = torch.sum(losses)/float(len(losses))
-            self.log("avg_val_loss_{task}", avg_loss)
+            avg_loss_task = torch.stack(losses).mean()
+            avg_loss_task = self.all_gather(avg_loss_task).mean()
+            self.log(f"avg_val_loss_{task}", avg_loss_task)
         self.val_losses = []
         self.task_val_losses = defaultdict(list)
 
@@ -383,7 +386,7 @@ if __name__ == '__main__':
     parser.add_argument('--instr-prompts', action='store_true', default=False, help='use instruction prompts for tasks')
     parser.add_argument('--gpu', type=int, default=None, help='number of gpus')
     parser.add_argument('--max-len', type=int, default=512, help='max sequence length')
-    parser.add_argument('--val-check_interval', type=float, default=1.0, help='validation loop interval')
+    parser.add_argument('--val-check-interval', type=float, default=1.0, help='validation loop interval')
     parser.add_argument('--checkpoint', default=None, help='resume from checkpoint path')
     parser.add_argument('--fast-dev-run', default=False, action='store_true', help='Do a quick testing run, not a full finetuning.')
     parser.add_argument('--limit-train-batches', default=None, type=int, help='Number of training batches to limit to.')
