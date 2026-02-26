@@ -6,6 +6,7 @@ sys.path.append('../')
 
 import argparse
 from typing import Dict, Optional, Any
+from collections import defaultdict
 import datasets
 import torch
 import torch.nn
@@ -100,6 +101,8 @@ class SciRepTrain(pl.LightningModule):
         self.max_len = max_len
         self.save_hyperparameters(ignore=["task_dict"])
         self.use_prompts = use_prompts
+        self.val_losses = []
+        self.task_val_losses = defaultdict(list)
 
     def forward(self, input_ids, attention_mask=None, token_idx=0, task_id=None):
         if not self.pals:
@@ -277,10 +280,12 @@ class SciRepTrain(pl.LightningModule):
             dist_loss_per_task = loss_per_task.clone().data
             dist_loss_per_task = sync_ddp_if_available(dist_loss_per_task, reduce_op=ReduceOp.SUM)
             for task in self.task_dict:
+                self.task_val_losses[task].append(dist_loss_per_task[self.task_idx[task]])
                 self.log(f"val_loss_{task}", dist_loss_per_task[self.task_idx[task]], on_step=True, on_epoch=True,
                          prog_bar=False,
                          batch_size=self.batch_size, rank_zero_only=True)
             self.log("val_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+            self.val_losses.append(loss)
             self.log("avg_val_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=self.batch_size)
             return {"val_loss": loss}
         except Exception as e:
@@ -288,6 +293,15 @@ class SciRepTrain(pl.LightningModule):
             print(f"[RANK {self.trainer.global_rank}] Exception in validation_step at batch {batch_idx}: {e}")
             print(traceback.format_exc())
             raise
+
+    def on_validation_epoch_end(self):
+        avg_val_loss = torch.sum(self.val_losses)/float(len(self.val_losses))
+        self.log("avg_val_loss", avg_val_loss)
+        for task, losses in self.task_val_losses.items():
+            avg_loss = torch.sum(losses)/float(len(losses))
+            self.log("avg_val_loss_{task}", avg_loss)
+        self.val_losses = []
+        self.task_val_losses = defaultdict(list)
 
     def load_data(self, split) -> CustomChainDataset:
         hf_split = "validation" if split == "dev" else "train"
