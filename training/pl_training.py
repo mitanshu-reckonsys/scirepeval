@@ -296,13 +296,9 @@ class SciRepTrain(pl.LightningModule):
 
     def on_validation_epoch_end(self):
     
-        avg_loss = torch.stack(self.val_losses).mean()
-        avg_loss = self.all_gather(avg_loss).mean() 
-        self.log("avg_val_loss", avg_loss)
+        self.log("avg_val_loss", torch.stack(self.val_losses).mean(), sync_dist=True) 
         for task, losses in self.task_val_losses.items():
-            avg_loss_task = torch.stack(losses).mean()
-            avg_loss_task = self.all_gather(avg_loss_task).mean()
-            self.log(f"avg_val_loss_{task}", avg_loss_task)
+            self.log(f"avg_val_loss_{task}", torch.stack(losses).mean(), sync_dist=True)
         self.val_losses = []
         self.task_val_losses = defaultdict(list)
 
