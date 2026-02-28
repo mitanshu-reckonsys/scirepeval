@@ -12,7 +12,7 @@ import torch
 import torch.nn
 from torch.distributed import ReduceOp
 from torch.utils.data import DataLoader
-from transformers import get_linear_schedule_with_warmup, get_cosine_schedule_with_warmup, get_cosine_with_min_lr_schedule_with_warmup
+from transformers import get_linear_schedule_with_warmup, get_cosine_schedule_with_warmup
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 
 from adapter_fusion import AdapterFactory
@@ -184,11 +184,10 @@ class SciRepTrain(pl.LightningModule):
             # Use cosine schedule for instruction-aware training (Qwen3-Embedding best practice)
             # Cosine schedule uses optimizer's lr (init_lr), peak_lr not used
             # Warmup: 0 → init_lr, then cosine decay: init_lr → ~0.1 * init_lr
-            scheduler = get_cosine_with_min_lr_schedule_with_warmup(
+            scheduler = get_cosine_schedule_with_warmup(
                 optimizer,
                 num_warmup_steps=warmup_steps,
-                num_training_steps=total_steps,
-                min_lr_rate=0.1
+                num_training_steps=total_steps
             )
             self.logger.log_hyperparams(dict(scheduler_type="cosine", num_warmup_steps=warmup_steps, num_training_steps=total_steps))
         else:
