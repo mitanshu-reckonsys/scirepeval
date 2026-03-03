@@ -87,7 +87,7 @@ class SciRepTrain(pl.LightningModule):
             self.encoder = AdapterFactory.get_adapter(model, task_ids,
                                                       adapter_type == "fusion", adapters_dir)
         else:
-            self.encoder = AutoModel.from_pretrained(model)
+            self.encoder = AutoModel.from_pretrained(model, trust_remote_code=True)
             if self.pals:
                 self.encoder = BertPalsEncoder(f"bert_pals_config/{pals_cfg}", task_ids, self.encoder)
         if self.use_ctrl_tokens:
@@ -393,7 +393,7 @@ if __name__ == '__main__':
     parser.add_argument('--use-cosine-schedule', default=False, action='store_true', help='Whether to use cosine decay for the learning rate scheduler. Defaults to inverse square root scheduler if False and not adapters or pals.')
 
     args = parser.parse_args()
-    mconfig = AutoConfig.from_pretrained(args.model)
+    mconfig = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
     tasks_dict = load_tasks(args.tasks_config, mconfig.hidden_size)
     log_dir = args.output
     logger = TensorBoardLogger(
