@@ -199,6 +199,10 @@ if __name__ == "__main__":
     parser.add_argument('--prompt-name', type=str, help='Name of prompt within prompt file to use.', default="blank")
     parser.add_argument('--embeddings-save-path', type=str, default=None, help='Path to parent directory where embeddings will be saved. If specified, config paths are treated as relative to this path.')
     parser.add_argument('--task-specific-prompts', action='store_true')
+    # Voyage4 API-specific arguments
+    parser.add_argument('--voyage-api', action='store_true', default=False, help='Use Voyage API instead of local model (requires VOYAGE_API_KEY env var)')
+    parser.add_argument('--voyage-doc-model', type=str, default=None, help='Separate Voyage model for encoding documents (defaults to --model)')
+    parser.add_argument('--voyage-output-dim', type=int, default=None, help='Output embedding dimension for Voyage API (256, 512, 1024, 2048)')
 
     args = parser.parse_args()
     adapters_load_from = args.adapters_dir if args.adapters_dir else args.adapters_chkpt
@@ -209,7 +213,13 @@ if __name__ == "__main__":
             model = InstructorModel(args.model)
         elif args.model_type == "voyage4":
             # Voyage4 uses built-in prompts, doesn't need prompt file
-            model = model_class_map[args.model_type](args.model, ckpt_path=args.checkpoint)
+            model = model_class_map[args.model_type](
+                args.model,
+                ckpt_path=args.checkpoint,
+                use_api=args.voyage_api,
+                doc_model=args.voyage_doc_model,
+                output_dimension=args.voyage_output_dim,
+            )
         else:
             if not args.prompt_file or not os.path.exists(args.prompt_file):
                 raise ValueError("Instructor model requires JSON file with prompts to use.")

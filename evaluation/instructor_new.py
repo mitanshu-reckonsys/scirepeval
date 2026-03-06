@@ -23,6 +23,12 @@ try:
 except ImportError:
     GRITLM_AVAILABLE = False
 
+try:
+    import voyageai
+    VOYAGEAI_AVAILABLE = True
+except ImportError:
+    VOYAGEAI_AVAILABLE = False
+
 # Version requirements
 MIN_TRANSFORMERS_VERSION_QWEN3 = (4, 51, 0)
 MIN_TRANSFORMERS_VERSION_GEMMA = (4, 56, 0)
@@ -397,36 +403,118 @@ class F2LLMModel(InstructorEmbeddingModel):
 
 class Voyage4Model(InstructorEmbeddingModel):
     """
-    Voyage4 nano model wrapper.
+    Voyage4 model wrapper supporting both local (SentenceTransformer) and API modes.
 
     Note: This is NOT an instruction-following model like Qwen3/Gemma.
     It uses built-in prompts via encode_query() and encode_document() methods.
     The task_prompts parameter is ignored - Voyage4 uses its own internal prompts.
+
+    Args:
+        embed_model: Model name. For local mode, this is a HuggingFace model path.
+                     For API mode, this is a Voyage model name (e.g., "voyage-3-large").
+        task_prompts: Ignored - Voyage4 uses its own internal prompts.
+        ckpt_path: Ignored for Voyage4 models.
+        use_api: If True, use the Voyage API instead of local SentenceTransformer.
+        doc_model: For API mode only - separate model name for encoding documents.
+                   If None, uses embed_model for both queries and documents.
+        output_dimension: For API mode only - output embedding dimension (256, 512, 1024, 2048).
+        truncation: For API mode only - whether to truncate over-length inputs (default: True).
     """
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str] = None, ckpt_path: str = None):
+    def __init__(
+        self,
+        embed_model: str,
+        task_prompts: Dict[str, str] = None,
+        ckpt_path: str = None,
+        use_api: bool = False,
+        doc_model: str = None,
+        output_dimension: int = None,
+        truncation: bool = True,
+    ):
         # Note: task_prompts is accepted for API compatibility but not used
         super().__init__(embed_model, "voyage4", task_prompts or {})
 
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError(
-                "Voyage4 requires sentence-transformers to be installed. "
-                "Please install: pip install sentence-transformers"
-            )
-
-        self.encoder = SentenceTransformer(embed_model, trust_remote_code=True)
-        self.encoder.max_seq_length = 512
-        self.tokenizer = self.encoder.tokenizer
-        self._setup_tokenizer_sep_token(self.tokenizer)
+        self.use_api = use_api
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def _encode_batch(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
-        """
-        Encode batch using Voyage4's built-in query/document prompts.
+        if use_api:
+            if not VOYAGEAI_AVAILABLE:
+                raise ImportError(
+                    "Voyage4 API mode requires the voyageai package. "
+                    "Please install: pip install voyageai\n"
+                    "You also need to set the VOYAGE_API_KEY environment variable."
+                )
+            self.client = voyageai.Client()
+            self.query_model = embed_model
+            self.doc_model = doc_model if doc_model else embed_model
+            self.output_dimension = output_dimension
+            self.truncation = truncation
+            self.tokenizer = None
+        else:
+            if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                raise ImportError(
+                    "Voyage4 local mode requires sentence-transformers to be installed. "
+                    "Please install: pip install sentence-transformers"
+                )
+            self.encoder = SentenceTransformer(embed_model, trust_remote_code=True)
+            self.encoder.max_seq_length = 512
+            self.tokenizer = self.encoder.tokenizer
+            self._setup_tokenizer_sep_token(self.tokenizer)
 
-        For search tasks, uses encode_query for queries and encode_document for candidates.
-        For other tasks, uses encode_document for all inputs.
-        """
+    def _embed_api(self, texts: List[str], input_type: str, model: str) -> torch.Tensor:
+        """Embed texts using the Voyage API."""
+        kwargs = {
+            "texts": texts,
+            "model": model,
+            "input_type": input_type,
+            "truncation": self.truncation,
+        }
+
+        if self.output_dimension is not None:
+            kwargs["output_dimension"] = self.output_dimension
+
+        result = self.client.embed(**kwargs)
+        return torch.tensor(result.embeddings)
+
+    def _encode_batch_api(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
+        """Encode batch using the Voyage API with separate query/doc models."""
+        is_search_task = isinstance(self.task_id, dict)
+
+        if is_search_task and batch_ids:
+            # Separate queries and documents for batch processing
+            query_texts = []
+            query_indices = []
+            doc_texts = []
+            doc_indices = []
+
+            for i, (_, batch_type) in enumerate(batch_ids):
+                if batch_type == QUERY_TYPE:
+                    query_texts.append(batch[i])
+                    query_indices.append(i)
+                else:
+                    doc_texts.append(batch[i])
+                    doc_indices.append(i)
+
+            # Batch encode queries and documents separately
+            embeddings = [None] * len(batch)
+
+            if query_texts:
+                query_embeddings = self._embed_api(query_texts, "query", self.query_model)
+                for idx, emb in zip(query_indices, query_embeddings):
+                    embeddings[idx] = emb
+
+            if doc_texts:
+                doc_embeddings = self._embed_api(doc_texts, "document", self.doc_model)
+                for idx, emb in zip(doc_indices, doc_embeddings):
+                    embeddings[idx] = emb
+
+            return torch.stack(embeddings)
+        else:
+            # Non-search task: use document encoding for all
+            return self._embed_api(batch, "document", self.doc_model)
+
+    def _encode_batch_local(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
+        """Encode batch using local SentenceTransformer with built-in query/document prompts."""
         is_search_task = isinstance(self.task_id, dict)
 
         if is_search_task and batch_ids:
@@ -445,8 +533,11 @@ class Voyage4Model(InstructorEmbeddingModel):
             return self.encoder.encode_document(batch, convert_to_tensor=True, device=self.device)
 
     def __call__(self, batch: List[str], batch_ids: Optional[List] = None):
-        batch = self._replace_sep_placeholder(batch)
-        return self._encode_batch(batch, batch_ids)
+        if not self.use_api:
+            batch = self._replace_sep_placeholder(batch)
+            return self._encode_batch_local(batch, batch_ids)
+        else:
+            return self._encode_batch_api(batch, batch_ids)
 
 
 class GritLMModel(InstructorEmbeddingModel):
