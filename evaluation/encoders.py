@@ -41,7 +41,7 @@ class EncoderFactory:
 
     def get_encoder(self, variant: str):
         if variant == "default":
-            return AutoModel.from_pretrained(self.base_checkpoint)
+            return AutoModel.from_pretrained(self.base_checkpoint, trust_remote_code=True)
 
         elif variant == "pals":
             if not PALS_AVAILABLE:
