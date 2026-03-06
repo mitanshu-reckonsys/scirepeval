@@ -200,9 +200,7 @@ if __name__ == "__main__":
     parser.add_argument('--embeddings-save-path', type=str, default=None, help='Path to parent directory where embeddings will be saved. If specified, config paths are treated as relative to this path.')
     parser.add_argument('--task-specific-prompts', action='store_true')
     # Voyage4 API-specific arguments
-    parser.add_argument('--voyage-api', action='store_true', default=False, help='Use Voyage API instead of local model (requires VOYAGE_API_KEY env var)')
-    parser.add_argument('--voyage-doc-model', type=str, default=None, help='Separate Voyage model for encoding documents (defaults to --model)')
-    parser.add_argument('--voyage-output-dim', type=int, default=None, help='Output embedding dimension for Voyage API (256, 512, 1024, 2048)')
+    parser.add_argument('--voyage-api', action='store_true', default=False, help='Use Voyage API for docs (local nano for queries). Requires VOYAGE_API_KEY env var')
 
     args = parser.parse_args()
     adapters_load_from = args.adapters_dir if args.adapters_dir else args.adapters_chkpt
@@ -217,8 +215,6 @@ if __name__ == "__main__":
                 args.model,
                 ckpt_path=args.checkpoint,
                 use_api=args.voyage_api,
-                doc_model=args.voyage_doc_model,
-                output_dimension=args.voyage_output_dim,
             )
         else:
             if not args.prompt_file or not os.path.exists(args.prompt_file):

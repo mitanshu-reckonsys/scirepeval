@@ -401,6 +401,9 @@ class F2LLMModel(InstructorEmbeddingModel):
         return self._encode_batch(formatted_batch)
 
 
+VOYAGE4_NANO_MODEL = "voyageai/voyage-4-nano"
+
+
 class Voyage4Model(InstructorEmbeddingModel):
     """
     Voyage4 model wrapper supporting both local (SentenceTransformer) and API modes.
@@ -414,11 +417,8 @@ class Voyage4Model(InstructorEmbeddingModel):
                      For API mode, this is a Voyage model name (e.g., "voyage-3-large").
         task_prompts: Ignored - Voyage4 uses its own internal prompts.
         ckpt_path: Ignored for Voyage4 models.
-        use_api: If True, use the Voyage API instead of local SentenceTransformer.
-        doc_model: For API mode only - separate model name for encoding documents.
-                   If None, uses embed_model for both queries and documents.
-        output_dimension: For API mode only - output embedding dimension (256, 512, 1024, 2048).
-        truncation: For API mode only - whether to truncate over-length inputs (default: True).
+        use_api: If True, use the Voyage API for document encoding and local nano model
+                 for query encoding.
     """
 
     def __init__(
@@ -427,9 +427,6 @@ class Voyage4Model(InstructorEmbeddingModel):
         task_prompts: Dict[str, str] = None,
         ckpt_path: str = None,
         use_api: bool = False,
-        doc_model: str = None,
-        output_dimension: int = None,
-        truncation: bool = True,
     ):
         # Note: task_prompts is accepted for API compatibility but not used
         super().__init__(embed_model, "voyage4", task_prompts or {})
@@ -444,11 +441,16 @@ class Voyage4Model(InstructorEmbeddingModel):
                     "Please install: pip install voyageai\n"
                     "You also need to set the VOYAGE_API_KEY environment variable."
                 )
+            if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                raise ImportError(
+                    "Voyage4 API mode requires sentence-transformers for local query encoding. "
+                    "Please install: pip install sentence-transformers"
+                )
             self.client = voyageai.Client()
-            self.query_model = embed_model
-            self.doc_model = doc_model if doc_model else embed_model
-            self.output_dimension = output_dimension
-            self.truncation = truncation
+            self.doc_model = embed_model
+            # Load local nano model for query encoding
+            self.query_encoder = SentenceTransformer(VOYAGE4_NANO_MODEL, trust_remote_code=True)
+            self.query_encoder.max_seq_length = 512
             self.tokenizer = None
         else:
             if not SENTENCE_TRANSFORMERS_AVAILABLE:
@@ -461,23 +463,21 @@ class Voyage4Model(InstructorEmbeddingModel):
             self.tokenizer = self.encoder.tokenizer
             self._setup_tokenizer_sep_token(self.tokenizer)
 
-    def _embed_api(self, texts: List[str], input_type: str, model: str) -> torch.Tensor:
-        """Embed texts using the Voyage API."""
-        kwargs = {
-            "texts": texts,
-            "model": model,
-            "input_type": input_type,
-            "truncation": self.truncation,
-        }
-
-        if self.output_dimension is not None:
-            kwargs["output_dimension"] = self.output_dimension
-
-        result = self.client.embed(**kwargs)
+    def _embed_api(self, texts: List[str]) -> torch.Tensor:
+        """Embed documents using the Voyage API."""
+        result = self.client.embed(
+            texts=texts,
+            model=self.doc_model,
+            input_type="document",
+        )
         return torch.tensor(result.embeddings)
 
+    def _encode_queries_local(self, texts: List[str]) -> torch.Tensor:
+        """Encode queries using the local nano model."""
+        return self.query_encoder.encode_query(texts, convert_to_tensor=True, device=self.device)
+
     def _encode_batch_api(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
-        """Encode batch using the Voyage API with separate query/doc models."""
+        """Encode batch using the Voyage API for docs and local nano model for queries."""
         is_search_task = isinstance(self.task_id, dict)
 
         if is_search_task and batch_ids:
@@ -499,19 +499,19 @@ class Voyage4Model(InstructorEmbeddingModel):
             embeddings = [None] * len(batch)
 
             if query_texts:
-                query_embeddings = self._embed_api(query_texts, "query", self.query_model)
+                query_embeddings = self._encode_queries_local(query_texts)
                 for idx, emb in zip(query_indices, query_embeddings):
                     embeddings[idx] = emb
 
             if doc_texts:
-                doc_embeddings = self._embed_api(doc_texts, "document", self.doc_model)
+                doc_embeddings = self._embed_api(doc_texts)
                 for idx, emb in zip(doc_indices, doc_embeddings):
                     embeddings[idx] = emb
 
             return torch.stack(embeddings)
         else:
             # Non-search task: use document encoding for all
-            return self._embed_api(batch, "document", self.doc_model)
+            return self._embed_api(batch)
 
     def _encode_batch_local(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
         """Encode batch using local SentenceTransformer with built-in query/document prompts."""
