@@ -476,6 +476,11 @@ class Voyage4Model(InstructorEmbeddingModel):
         """Encode queries using the local nano model."""
         return self.query_encoder.encode_query(texts, convert_to_tensor=True, device=self.device)
 
+    def _encode_batch(self, formatted_batch: List[str]) -> torch.Tensor:
+        """Required by parent class but not used directly - see __call__ instead."""
+        # This is only called for non-search tasks in local mode
+        return self.encoder.encode_document(formatted_batch, convert_to_tensor=True, device=self.device)
+
     def _encode_batch_api(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
         """Encode batch using the Voyage API for docs and local nano model for queries."""
         is_search_task = isinstance(self.task_id, dict)
