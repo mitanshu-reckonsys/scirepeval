@@ -7,35 +7,6 @@ import json
 from sentence_transformers.losses import MultipleNegativesRankingLoss
 
 
-class EncoderWrapper(nn.Module):
-    """
-    Wraps the encoder to be compatible with sentence-transformers MNRL.
-    MNRL expects model(features) to return {"sentence_embedding": tensor}.
-    """
-    def __init__(self, encoder, use_last_token=False):
-        super().__init__()
-        self.encoder = encoder
-        self.use_last_token = use_last_token
-
-    def forward(self, features):
-        input_ids = features["input_ids"]
-        attention_mask = features["attention_mask"]
-
-        output = self.encoder(input_ids, attention_mask=attention_mask)
-
-        if self.use_last_token:
-            sequence_lengths = attention_mask.sum(dim=1) - 1
-            batch_size = output.last_hidden_state.shape[0]
-            embeddings = output.last_hidden_state[
-                torch.arange(batch_size, device=output.last_hidden_state.device),
-                sequence_lengths,
-            ]
-        else:
-            embeddings = output.last_hidden_state[:, 0, :]  # CLS token
-
-        return {"sentence_embedding": embeddings}
-
-
 class TaskFamily:
     def __init__(self, name, loss, type, dataset=None, data_files=None, multi_label=False, input_fields=None,
                  labels_field=None, labels=None, ctrl_token=None, head=None, contrastive_loss=None, sample_size=-1,

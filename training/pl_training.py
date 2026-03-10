@@ -21,7 +21,8 @@ from mtl_datasets import ClassificationDataset, multi_collate, MultiLabelClassif
     CustomChainDataset, TripletDataset, RegressionDataset
 from schedulers import InverseSquareRootSchedule, InverseSquareRootScheduleConfig
 from strategies import BatchingStrategy
-from tasks import TaskFamily, load_tasks, EncoderWrapper, MultipleNegativesRankingLoss
+from tasks import TaskFamily, load_tasks, MultipleNegativesRankingLoss
+from sentence_transformers import SentenceTransformer
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -106,17 +107,9 @@ class SciRepTrain(pl.LightningModule):
         self.use_cosine_schedule = use_cosine_schedule
         self.batching_strategy = batching_strategy
 
-        # Create encoder wrapper for MNRL compatibility
-        self.encoder_wrapper = EncoderWrapper(self.encoder, use_last_token=self.use_last_token)
-
-        # Initialize MNRL losses for tasks that need it
-        self.mnrl_losses = torch.nn.ModuleDict()
-        for name, task in self.task_dict.items():
-            if task.loss_type == "mnrl":
-                self.mnrl_losses[name] = MultipleNegativesRankingLoss(
-                    model=self.encoder_wrapper,
-                    scale=task.mnrl_scale
-                )
+        # Store MNRL scales for later initialization in on_fit_start
+        self._mnrl_scales = {name: task.mnrl_scale for name, task in self.task_dict.items() if task.loss_type == "mnrl"}
+        self._mnrl_losses = None  # Will be initialized in on_fit_start (not a Module, just a dict)
 
     def forward(self, input_ids, attention_mask=None, token_idx=0, task_id=None):
         if not self.pals:
@@ -232,7 +225,7 @@ class SciRepTrain(pl.LightningModule):
                     # batch[0] is a list of 3 dicts: [queries, positives, negatives]
                     # Each dict has 'input_ids' and 'attention_mask' already stacked as tensors
                     sentence_features = batch[0]  # Already [queries_dict, pos_dict, neg_dict]
-                    curr_loss = self.mnrl_losses[name](sentence_features, labels=None)
+                    curr_loss = self._mnrl_losses[name](sentence_features, labels=None)
                 else:
                     # Original TripletLoss path - batch[0] contains list of [query, pos, neg] per sample
                     # For mixed batches, we only process first sample (original behavior)
@@ -362,6 +355,22 @@ class SciRepTrain(pl.LightningModule):
 
     def setup(self, stage: Optional[str] = None) -> None:
         self.load_data("train")
+
+    def on_fit_start(self) -> None:
+        # Create SentenceTransformer wrapper around self.encoder (which may have been loaded from checkpoint)
+        # This is done here instead of __init__ so checkpoint weights are loaded first
+        from sentence_transformers import models
+        transformer_module = models.Transformer(model_name_or_path=None, model=self.encoder, tokenizer=self.tokenizer)
+        pooling_module = models.Pooling(self.encoder.config.hidden_size, pooling_mode='lasttoken' if self.use_last_token else 'cls')
+        self._sentence_transformer = SentenceTransformer(modules=[transformer_module, pooling_module])
+
+        # Initialize MNRL losses (plain dict, not ModuleDict - no learnable params)
+        self._mnrl_losses = {}
+        for name, scale in self._mnrl_scales.items():
+            self._mnrl_losses[name] = MultipleNegativesRankingLoss(
+                model=self._sentence_transformer,
+                scale=scale
+            )
 
     def train_dataloader(self) -> TRAIN_DATALOADERS:
         return DataLoader(self.multi_train, batch_size=self.batch_size, collate_fn=multi_collate, num_workers=1,
