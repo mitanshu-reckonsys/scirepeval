@@ -49,7 +49,7 @@ class SciRepTrain(pl.LightningModule):
                  log_dir: str,
                  use_ctrl_tokens=False,
                  task_dict: Dict[str, TaskFamily] = None,
-                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False, use_cosine_schedule=False):
+                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False, use_cosine_schedule=False, batching_strategy: BatchingStrategy = BatchingStrategy.MIXED_PROPORTIONAL):
         super().__init__()
         self.task_dict = load_tasks() if not task_dict else task_dict
         print(self.task_dict.keys())
@@ -104,6 +104,7 @@ class SciRepTrain(pl.LightningModule):
         self.val_losses = []
         self.task_val_losses = defaultdict(list)
         self.use_cosine_schedule = use_cosine_schedule
+        self.batching_strategy = batching_strategy
 
         # Create encoder wrapper for MNRL compatibility
         self.encoder_wrapper = EncoderWrapper(self.encoder, use_last_token=self.use_last_token)
@@ -226,16 +227,16 @@ class SciRepTrain(pl.LightningModule):
             idx = 0 if not self.use_ctrl_tokens else 1
             task_id = task.ctrl_token
             if task.type not in set(["classification", "regression"]):
-                query, pos, neg = batch[0][0], batch[0][1], batch[0][2]
-
                 if task.loss_type == "mnrl":
-                    # Use sentence-transformers MNRL directly
-                    # MNRL expects list of sentence_features dicts
-                    sentence_features = [query, pos, neg]
-                    # Labels not used by MNRL (it creates its own)
+                    # For MNRL with homogeneous batches (TASK_PER_BATCH strategy):
+                    # batch[0] is a list of 3 dicts: [queries, positives, negatives]
+                    # Each dict has 'input_ids' and 'attention_mask' already stacked as tensors
+                    sentence_features = batch[0]  # Already [queries_dict, pos_dict, neg_dict]
                     curr_loss = self.mnrl_losses[name](sentence_features, labels=None)
                 else:
-                    # Original TripletLoss path
+                    # Original TripletLoss path - batch[0] contains list of [query, pos, neg] per sample
+                    # For mixed batches, we only process first sample (original behavior)
+                    query, pos, neg = batch[0][0], batch[0][1], batch[0][2]
                     query_ctrl = cand_ctrl = task_id
                     if type(task_id) == dict:
                         query_ctrl = task_id["query"]
@@ -353,7 +354,7 @@ class SciRepTrain(pl.LightningModule):
                 dataset_list.append(task_dataset_map.get(task.type, TripletDataset)(**kwargs))
         multi_dataset = CustomChainDataset(dataset_list, batch_size=self.batch_size,
                                            device_rank=self.trainer.global_rank, num_devices=self.trainer.world_size,
-                                           batching_strategy=BatchingStrategy.MIXED_PROPORTIONAL)
+                                           batching_strategy=self.batching_strategy)
         if split == "train":
             self.multi_train = multi_dataset
         elif split == "dev":
@@ -412,6 +413,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint-n-steps', default=100, type=int, help='How often to save checkpoints in number of effective batches.')
     parser.add_argument('--use-last-token', default=False, action='store_true', help='Whether to use last token for pooling.')
     parser.add_argument('--use-cosine-schedule', default=False, action='store_true', help='Whether to use cosine decay for the learning rate scheduler. Defaults to inverse square root scheduler if False and not adapters or pals.')
+    parser.add_argument('--batching-strategy', default='MIXED_PROPORTIONAL', choices=[s.name for s in BatchingStrategy], help='Batching strategy for multi-task learning. Use TASK_PER_BATCH for homogeneous batches (required for MNRL loss).')
 
     args = parser.parse_args()
     mconfig = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
@@ -449,8 +451,8 @@ if __name__ == '__main__':
                         warmup_steps=args.warmup,
                         use_ctrl_tokens=args.ctrl_tokens, task_dict=tasks_dict, pals_cfg=args.pals_config,
                         adapter_type=args.adapter_type, log_dir=filepath, max_len=args.max_len,
-                        load_adapters_as=args.adapters_chkpt, use_prompts=args.instr_prompts, use_last_token=args.use_last_token, 
-                        use_cosine_schedule=args.use_cosine_schedule)
+                        load_adapters_as=args.adapters_chkpt, use_prompts=args.instr_prompts, use_last_token=args.use_last_token,
+                        use_cosine_schedule=args.use_cosine_schedule, batching_strategy=BatchingStrategy[args.batching_strategy])
 
     hparams = {"accelerator": "gpu" if args.gpu else "cpu", "devices": args.gpu if args.gpu else "auto",
                "val_check_interval": args.val_check_interval, "num_sanity_val_steps": 4,
