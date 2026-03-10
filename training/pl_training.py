@@ -359,15 +359,15 @@ class SciRepTrain(pl.LightningModule):
     def on_fit_start(self) -> None:
         # Create SentenceTransformer wrapper around self.encoder (which may have been loaded from checkpoint)
         # This is done here instead of __init__ so checkpoint weights are loaded first
+        if not self._mnrl_scales:
+            return  # No MNRL tasks, skip SentenceTransformer setup
+
         from sentence_transformers import models
 
-        # Create transformer module and inject our encoder
-        transformer_module = models.Transformer.__new__(models.Transformer)
-        nn.Module.__init__(transformer_module)
-        transformer_module.auto_model = self.encoder
-        transformer_module.tokenizer = self.tokenizer
-        transformer_module.config_keys = ['max_seq_length', 'do_lower_case']
-        transformer_module.do_lower_case = False
+        # Initialize Transformer with model name, then copy weights from self.encoder
+        # This ensures we use any checkpoint-loaded weights
+        transformer_module = models.Transformer(self.hparams.model, tokenizer_name_or_path=self.hparams.tokenizer)
+        transformer_module.auto_model.load_state_dict(self.encoder.state_dict())
         transformer_module.max_seq_length = self.max_len
 
         pooling_mode = 'lasttoken' if self.use_last_token else 'cls'
