@@ -360,8 +360,18 @@ class SciRepTrain(pl.LightningModule):
         # Create SentenceTransformer wrapper around self.encoder (which may have been loaded from checkpoint)
         # This is done here instead of __init__ so checkpoint weights are loaded first
         from sentence_transformers import models
-        transformer_module = models.Transformer(model_name_or_path=None, model=self.encoder, tokenizer=self.tokenizer)
-        pooling_module = models.Pooling(self.encoder.config.hidden_size, pooling_mode='lasttoken' if self.use_last_token else 'cls')
+
+        # Create transformer module and inject our encoder
+        transformer_module = models.Transformer.__new__(models.Transformer)
+        nn.Module.__init__(transformer_module)
+        transformer_module.auto_model = self.encoder
+        transformer_module.tokenizer = self.tokenizer
+        transformer_module.config_keys = ['max_seq_length', 'do_lower_case']
+        transformer_module.do_lower_case = False
+        transformer_module.max_seq_length = self.max_len
+
+        pooling_mode = 'lasttoken' if self.use_last_token else 'cls'
+        pooling_module = models.Pooling(self.encoder.config.hidden_size, pooling_mode=pooling_mode)
         self._sentence_transformer = SentenceTransformer(modules=[transformer_module, pooling_module])
 
         # Initialize MNRL losses (plain dict, not ModuleDict - no learnable params)
