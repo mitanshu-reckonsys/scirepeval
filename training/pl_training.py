@@ -49,7 +49,7 @@ class SciRepTrain(pl.LightningModule):
                  log_dir: str,
                  use_ctrl_tokens=False,
                  task_dict: Dict[str, TaskFamily] = None,
-                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False, use_cosine_schedule=False, batching_strategy: BatchingStrategy = BatchingStrategy.MIXED_PROPORTIONAL):
+                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False, use_cosine_schedule=False, batching_strategy: str = "MIXED_PROPORTIONAL"):
         super().__init__()
         self.task_dict = load_tasks() if not task_dict else task_dict
         print(self.task_dict.keys())
@@ -354,7 +354,7 @@ class SciRepTrain(pl.LightningModule):
                 dataset_list.append(task_dataset_map.get(task.type, TripletDataset)(**kwargs))
         multi_dataset = CustomChainDataset(dataset_list, batch_size=self.batch_size,
                                            device_rank=self.trainer.global_rank, num_devices=self.trainer.world_size,
-                                           batching_strategy=self.batching_strategy)
+                                           batching_strategy=BatchingStrategy[self.batching_strategy])
         if split == "train":
             self.multi_train = multi_dataset
         elif split == "dev":
@@ -452,7 +452,7 @@ if __name__ == '__main__':
                         use_ctrl_tokens=args.ctrl_tokens, task_dict=tasks_dict, pals_cfg=args.pals_config,
                         adapter_type=args.adapter_type, log_dir=filepath, max_len=args.max_len,
                         load_adapters_as=args.adapters_chkpt, use_prompts=args.instr_prompts, use_last_token=args.use_last_token,
-                        use_cosine_schedule=args.use_cosine_schedule, batching_strategy=BatchingStrategy[args.batching_strategy])
+                        use_cosine_schedule=args.use_cosine_schedule, batching_strategy=args.batching_strategy)
 
     hparams = {"accelerator": "gpu" if args.gpu else "cpu", "devices": args.gpu if args.gpu else "auto",
                "val_check_interval": args.val_check_interval, "num_sanity_val_steps": 4,
