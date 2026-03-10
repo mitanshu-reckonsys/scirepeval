@@ -69,7 +69,7 @@ class AbstractMultiTaskDataset(ABC, IterableDataset):
             map_itr = map(self.preprocess, self.sub_sample(json_parse))
         return self.postprocess_iter(map_itr)
 
-    def tokenized_input(self, input_data: Union[Dict[str, str], str], ctrl_token_key: str = None) -> BatchEncoding:
+    def tokenized_input(self, input_data: Union[Dict[str, str], str], ctrl_token_key: str = None, skip_prompt: bool = False) -> BatchEncoding:
         text = []
         if type(input_data) == dict:
             for field in self.fields:
@@ -83,7 +83,7 @@ class AbstractMultiTaskDataset(ABC, IterableDataset):
         if self.ctrl_token:
             ctrl_token = self.ctrl_token if not ctrl_token_key else self.ctrl_token[ctrl_token_key]
             text = ctrl_token + " " + text
-        elif self.instr_prompt:
+        elif self.instr_prompt and not skip_prompt:
             instr_prompt = self.instr_prompt if not ctrl_token_key else self.instr_prompt[ctrl_token_key]
             text = instr_prompt.format(content=text)
         input_ids = self.tokenizer(text, padding="max_length", truncation=True, return_tensors="pt",
@@ -175,15 +175,19 @@ class IRDataset(AbstractMultiTaskDataset):
             while len(new_pos_candidates) < num_trips:
                 new_pos_candidates.append(next(pos_candidates))
         query_ctrl_key, cand_ctrl_key = None, None
+        skip_cand_prompt = False
         if type(self.ctrl_token) == dict or isinstance(self.instr_prompt, dict):
             query_ctrl_key = "query"
             cand_ctrl_key = "candidates"
+        elif self.instr_prompt:
+            # For symmetric tasks with string prompt, only apply to query, not candidates
+            skip_cand_prompt = True
         tokenized_query = self.tokenized_input(query, query_ctrl_key)
 
         for pos in new_pos_candidates[:num_trips]:
             neg = neg_candidates.pop()
-            tokenized_pos = self.tokenized_input(pos, cand_ctrl_key)
-            tokenized_neg = self.tokenized_input(neg, cand_ctrl_key)
+            tokenized_pos = self.tokenized_input(pos, cand_ctrl_key, skip_prompt=skip_cand_prompt)
+            tokenized_neg = self.tokenized_input(neg, cand_ctrl_key, skip_prompt=skip_cand_prompt)
             yield (self.task_name, [tokenized_query, tokenized_pos, tokenized_neg])
 
     def postprocess_iter(self, curr_iter):
