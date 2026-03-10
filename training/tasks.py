@@ -4,11 +4,42 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 import json
+from sentence_transformers.losses import MultipleNegativesRankingLoss
+
+
+class EncoderWrapper(nn.Module):
+    """
+    Wraps the encoder to be compatible with sentence-transformers MNRL.
+    MNRL expects model(features) to return {"sentence_embedding": tensor}.
+    """
+    def __init__(self, encoder, use_last_token=False):
+        super().__init__()
+        self.encoder = encoder
+        self.use_last_token = use_last_token
+
+    def forward(self, features):
+        input_ids = features["input_ids"]
+        attention_mask = features["attention_mask"]
+
+        output = self.encoder(input_ids, attention_mask=attention_mask)
+
+        if self.use_last_token:
+            sequence_lengths = attention_mask.sum(dim=1) - 1
+            batch_size = output.last_hidden_state.shape[0]
+            embeddings = output.last_hidden_state[
+                torch.arange(batch_size, device=output.last_hidden_state.device),
+                sequence_lengths,
+            ]
+        else:
+            embeddings = output.last_hidden_state[:, 0, :]  # CLS token
+
+        return {"sentence_embedding": embeddings}
 
 
 class TaskFamily:
     def __init__(self, name, loss, type, dataset=None, data_files=None, multi_label=False, input_fields=None,
-                 labels_field=None, labels=None, ctrl_token=None, head=None, contrastive_loss=None, sample_size=-1, instr_prompt=None):
+                 labels_field=None, labels=None, ctrl_token=None, head=None, contrastive_loss=None, sample_size=-1,
+                 instr_prompt=None, loss_type="triplet", mnrl_scale=20.0):
         if input_fields is None:
             input_fields = ["title", "abstract"]
         self.name = name
@@ -25,6 +56,8 @@ class TaskFamily:
         self.input_fields = input_fields
         self.sample_size = sample_size
         self.instr_prompt = instr_prompt
+        self.loss_type = loss_type
+        self.mnrl_scale = mnrl_scale
         if not self.dataset and not self.data_files:
             raise ValueError("Either dataset or data_files must be provided")
 
@@ -147,6 +180,15 @@ def load_tasks(tasks_config_file: str = "sample_data/tasks_config.json", hidden_
             task["head"] = TaskHead(num_labels=1, dim=hidden_size)
             task["loss"] = nn.MSELoss(reduction="none")
         else:
-            task["loss"] = TripletLoss(reduction="none")
+            # triplet or ir type - check for loss_type config
+            loss_type = task.get("loss_type", "triplet")
+            if loss_type == "mnrl":
+                # Store config, MNRL will be instantiated in SciRepTrain
+                task["loss"] = None  # Placeholder - MNRL needs the model reference
+                task["loss_type"] = "mnrl"
+                task["mnrl_scale"] = task.get("mnrl_scale", 20.0)
+            else:
+                task["loss"] = TripletLoss(reduction="none")
+                task["loss_type"] = "triplet"
         task_dict[task["name"]] = TaskFamily(**task)
     return task_dict

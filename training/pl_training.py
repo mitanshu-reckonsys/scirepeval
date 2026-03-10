@@ -21,7 +21,7 @@ from mtl_datasets import ClassificationDataset, multi_collate, MultiLabelClassif
     CustomChainDataset, TripletDataset, RegressionDataset
 from schedulers import InverseSquareRootSchedule, InverseSquareRootScheduleConfig
 from strategies import BatchingStrategy
-from tasks import TaskFamily, load_tasks
+from tasks import TaskFamily, load_tasks, EncoderWrapper, MultipleNegativesRankingLoss
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -104,6 +104,18 @@ class SciRepTrain(pl.LightningModule):
         self.val_losses = []
         self.task_val_losses = defaultdict(list)
         self.use_cosine_schedule = use_cosine_schedule
+
+        # Create encoder wrapper for MNRL compatibility
+        self.encoder_wrapper = EncoderWrapper(self.encoder, use_last_token=self.use_last_token)
+
+        # Initialize MNRL losses for tasks that need it
+        self.mnrl_losses = torch.nn.ModuleDict()
+        for name, task in self.task_dict.items():
+            if task.loss_type == "mnrl":
+                self.mnrl_losses[name] = MultipleNegativesRankingLoss(
+                    model=self.encoder_wrapper,
+                    scale=task.mnrl_scale
+                )
 
     def forward(self, input_ids, attention_mask=None, token_idx=0, task_id=None):
         if not self.pals:
@@ -215,31 +227,40 @@ class SciRepTrain(pl.LightningModule):
             task_id = task.ctrl_token
             if task.type not in set(["classification", "regression"]):
                 query, pos, neg = batch[0][0], batch[0][1], batch[0][2]
-                query_ctrl = cand_ctrl = task_id
-                if type(task_id) == dict:
-                    query_ctrl = task_id["query"]
-                    cand_ctrl = task_id["candidates"]
-                query_emb, pos_emb, neg_emb = (
-                    self(
-                        query["input_ids"],
-                        attention_mask=query["attention_mask"],
-                        token_idx=idx,
-                        task_id=query_ctrl
-                    ),
-                    self(
-                        pos["input_ids"],
-                        attention_mask=pos["attention_mask"],
-                        token_idx=idx,
-                        task_id=cand_ctrl
-                    ),
-                    self(
-                        neg["input_ids"],
-                        attention_mask=neg["attention_mask"],
-                        token_idx=idx,
-                        task_id=cand_ctrl
-                    ),
-                )
-                curr_loss = task.loss(query_emb, pos_emb, neg_emb)
+
+                if task.loss_type == "mnrl":
+                    # Use sentence-transformers MNRL directly
+                    # MNRL expects list of sentence_features dicts
+                    sentence_features = [query, pos, neg]
+                    # Labels not used by MNRL (it creates its own)
+                    curr_loss = self.mnrl_losses[name](sentence_features, labels=None)
+                else:
+                    # Original TripletLoss path
+                    query_ctrl = cand_ctrl = task_id
+                    if type(task_id) == dict:
+                        query_ctrl = task_id["query"]
+                        cand_ctrl = task_id["candidates"]
+                    query_emb, pos_emb, neg_emb = (
+                        self(
+                            query["input_ids"],
+                            attention_mask=query["attention_mask"],
+                            token_idx=idx,
+                            task_id=query_ctrl
+                        ),
+                        self(
+                            pos["input_ids"],
+                            attention_mask=pos["attention_mask"],
+                            token_idx=idx,
+                            task_id=cand_ctrl
+                        ),
+                        self(
+                            neg["input_ids"],
+                            attention_mask=neg["attention_mask"],
+                            token_idx=idx,
+                            task_id=cand_ctrl
+                        ),
+                    )
+                    curr_loss = task.loss(query_emb, pos_emb, neg_emb)
             else:
                 x, y = batch[0], batch[1]
                 encoding = self(
