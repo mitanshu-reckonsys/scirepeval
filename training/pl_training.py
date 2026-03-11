@@ -372,13 +372,15 @@ class SciRepTrain(pl.LightningModule):
 
         pooling_mode = 'lasttoken' if self.use_last_token else 'cls'
         pooling_module = models.Pooling(self.encoder.config.hidden_size, pooling_mode=pooling_mode)
-        self._sentence_transformer = SentenceTransformer(modules=[transformer_module, pooling_module])
+        # Store in a list to prevent Lightning from registering it as a submodule
+        # (which would cause checkpoint loading errors since it's created after checkpoint restore)
+        self._sentence_transformer_container = [SentenceTransformer(modules=[transformer_module, pooling_module])]
 
         # Initialize MNRL losses (plain dict, not ModuleDict - no learnable params)
         self._mnrl_losses = {}
         for name, scale in self._mnrl_scales.items():
             self._mnrl_losses[name] = MultipleNegativesRankingLoss(
-                model=self._sentence_transformer,
+                model=self._sentence_transformer_container[0],
                 scale=scale
             )
 
