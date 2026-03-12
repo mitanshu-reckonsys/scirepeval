@@ -24,7 +24,7 @@ from strategies import BatchingStrategy
 from tasks import TaskFamily, load_tasks
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, BatchSizeFinder
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 from lightning_fabric.utilities.distributed import _sync_ddp_if_available as sync_ddp_if_available
@@ -87,7 +87,8 @@ class SciRepTrain(pl.LightningModule):
             self.encoder = AdapterFactory.get_adapter(model, task_ids,
                                                       adapter_type == "fusion", adapters_dir)
         else:
-            self.encoder = AutoModel.from_pretrained(model, trust_remote_code=True)
+            self.encoder = AutoModel.from_pretrained(model, trust_remote_code=True, use_cache=False)
+            self.encoder.gradient_checkpointing_enable()
             if self.pals:
                 self.encoder = BertPalsEncoder(f"bert_pals_config/{pals_cfg}", task_ids, self.encoder)
         if self.use_ctrl_tokens:
@@ -386,6 +387,7 @@ if __name__ == '__main__':
     parser.add_argument('--val-check-interval', type=float, default=1.0, help='validation loop interval')
     parser.add_argument('--checkpoint', default=None, help='resume from checkpoint path')
     parser.add_argument('--fast-dev-run', default=False, action='store_true', help='Do a quick testing run, not a full finetuning.')
+    parser.add_argument('--find-batch-size', default=False, action='store_true', help='Search for optimal batch size')
     parser.add_argument('--limit-train-batches', default=None, type=int, help='Number of training batches to limit to.')
     parser.add_argument('--limit-val-batches', default=None, type=int, help='Number of validation batches to limit to.')
     parser.add_argument('--checkpoint-n-steps', default=100, type=int, help='How often to save checkpoints in number of effective batches.')
@@ -441,14 +443,20 @@ if __name__ == '__main__':
                "val_check_interval": args.val_check_interval, "num_sanity_val_steps": 4,
                "max_epochs": args.epochs,
                "accumulate_grad_batches": args.grad_accum}
+    
+    callbacks = [checkpoint_callback_val_loss, checkpoint_callback_steps]
+    
+    if args.find_batch_size:
+        batch_size_finder = BatchSizeFinder(init_val=1)
+        callbacks.append(batch_size_finder)
 
     trainer = pl.Trainer(logger=logger,
                          strategy=training_strategy,
                          enable_checkpointing=True,
-                         callbacks=[checkpoint_callback_val_loss, checkpoint_callback_steps],
+                         callbacks=callbacks,
                          precision="bf16-mixed",
                          fast_dev_run=args.fast_dev_run,
-                         log_every_n_steps=10,
+                         log_every_n_steps=5,
                          limit_train_batches=args.limit_train_batches,
                          limit_val_batches=args.limit_val_batches,
                          **hparams)
