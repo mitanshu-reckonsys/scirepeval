@@ -28,6 +28,8 @@ sentence-transformers==5.1.0  # Required for Gemma
 # PyTorch Lightning - updated version
 pytorch-lightning>=2.0.0
 torchmetrics>=1.0.0
+py-cpuinfo>=9.0.0
+deepspeed==0.18.7
 
 # NOTE: adapters package is NOT included in this environment
 # It is incompatible with transformers>=4.51
