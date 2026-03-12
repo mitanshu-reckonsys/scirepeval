@@ -391,6 +391,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint-n-steps', default=100, type=int, help='How often to save checkpoints in number of effective batches.')
     parser.add_argument('--use-last-token', default=False, action='store_true', help='Whether to use last token for pooling.')
     parser.add_argument('--use-cosine-schedule', default=False, action='store_true', help='Whether to use cosine decay for the learning rate scheduler. Defaults to inverse square root scheduler if False and not adapters or pals.')
+    parser.add_argument('--training-strategy', default=None, type=str, help='Training strategy to use.')
 
     args = parser.parse_args()
     mconfig = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
@@ -420,6 +421,11 @@ if __name__ == '__main__':
         verbose=True,
         every_n_train_steps=args.checkpoint_n_steps
     )
+
+    if not args.training_strategy:
+        training_strategy="ddp_find_unused_parameters_true" if args.gpu > 1 else "auto"
+    else:
+        training_strategy = args.training_strategy
     
     model = SciRepTrain(batch_size=args.batch_size, init_lr=args.lr,
                         peak_lr=args.peak_lr,
@@ -437,7 +443,7 @@ if __name__ == '__main__':
                "accumulate_grad_batches": args.grad_accum}
 
     trainer = pl.Trainer(logger=logger,
-                         strategy="ddp_find_unused_parameters_true" if args.gpu > 1 else "auto",
+                         strategy=training_strategy,
                          enable_checkpointing=True,
                          callbacks=[checkpoint_callback_val_loss, checkpoint_callback_steps],
                          precision="bf16-mixed",
