@@ -22,7 +22,6 @@ from mtl_datasets import ClassificationDataset, multi_collate, MultiLabelClassif
 from schedulers import InverseSquareRootSchedule, InverseSquareRootScheduleConfig
 from strategies import BatchingStrategy
 from tasks import TaskFamily, load_tasks, MultipleNegativesRankingLoss
-from sentence_transformers import SentenceTransformer
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -43,6 +42,36 @@ def init_weights(modules):
 
 
 pl_to_split_map = {"fit": "train", "validate": "dev", "test": "test", "predict": "test"}
+
+
+class EncoderSentenceTransformerWrapper(torch.nn.Module):
+    """Wraps the base encoder to be compatible with SentenceTransformer losses.
+
+    This wrapper references the encoder directly (no weight copying) so gradients
+    flow back to self.encoder during training.
+    """
+    def __init__(self, encoder, pooling_mode='cls'):
+        super().__init__()
+        self.encoder = encoder  # Reference, not copy
+        self.pooling_mode = pooling_mode
+
+    def forward(self, features: dict) -> dict:
+        input_ids = features['input_ids']
+        attention_mask = features.get('attention_mask', None)
+
+        outputs = self.encoder(input_ids, attention_mask=attention_mask)
+        token_embeddings = outputs.last_hidden_state
+
+        if self.pooling_mode == 'cls':
+            sentence_embedding = token_embeddings[:, 0]
+        elif self.pooling_mode == 'lasttoken':
+            # Get last non-padded token
+            seq_lengths = attention_mask.sum(dim=1) - 1
+            sentence_embedding = token_embeddings[torch.arange(token_embeddings.size(0), device=token_embeddings.device), seq_lengths]
+        else:
+            raise ValueError(f"Unknown pooling mode: {self.pooling_mode}")
+
+        return {"sentence_embedding": sentence_embedding}
 
 
 class SciRepTrain(pl.LightningModule):
@@ -357,30 +386,23 @@ class SciRepTrain(pl.LightningModule):
         self.load_data("train")
 
     def on_fit_start(self) -> None:
-        # Create SentenceTransformer wrapper around self.encoder (which may have been loaded from checkpoint)
-        # This is done here instead of __init__ so checkpoint weights are loaded first
         if not self._mnrl_scales:
-            return  # No MNRL tasks, skip SentenceTransformer setup
-
-        from sentence_transformers import models
-
-        # Initialize Transformer with model name, then copy weights from self.encoder
-        # This ensures we use any checkpoint-loaded weights
-        transformer_module = models.Transformer(self.hparams.model, tokenizer_name_or_path=self.hparams.tokenizer)
-        transformer_module.auto_model.load_state_dict(self.encoder.state_dict())
-        transformer_module.max_seq_length = self.max_len
+            return  # No MNRL tasks, skip wrapper setup
 
         pooling_mode = 'lasttoken' if self.use_last_token else 'cls'
-        pooling_module = models.Pooling(self.encoder.config.hidden_size, pooling_mode=pooling_mode)
-        # Store in a list to prevent Lightning from registering it as a submodule
-        # (which would cause checkpoint loading errors since it's created after checkpoint restore)
-        self._sentence_transformer_container = [SentenceTransformer(modules=[transformer_module, pooling_module])]
+
+        # Create wrapper that REFERENCES self.encoder directly (no weight copying)
+        # Gradients will flow back to self.encoder during training
+        self._encoder_wrapper = EncoderSentenceTransformerWrapper(
+            encoder=self.encoder,
+            pooling_mode=pooling_mode
+        )
 
         # Initialize MNRL losses (plain dict, not ModuleDict - no learnable params)
         self._mnrl_losses = {}
         for name, scale in self._mnrl_scales.items():
             self._mnrl_losses[name] = MultipleNegativesRankingLoss(
-                model=self._sentence_transformer_container[0],
+                model=self._encoder_wrapper,
                 scale=scale
             )
 
