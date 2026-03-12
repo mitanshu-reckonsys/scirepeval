@@ -71,6 +71,8 @@ class AbstractMultiTaskDataset(ABC, IterableDataset):
 
     def tokenized_input(self, input_data: Union[Dict[str, str], str], ctrl_token_key: str = None, skip_prompt: bool = False) -> BatchEncoding:
         text = []
+        if not self.tokenizer.sep_token:
+            self.tokenizer.sep_token = "\n\n"
         if type(input_data) == dict:
             for field in self.fields:
                 if input_data[field]:
