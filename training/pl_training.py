@@ -315,10 +315,10 @@ class SciRepTrain(pl.LightningModule):
             op_token = task.ctrl_token if self.use_ctrl_tokens else None
             instr_prompt = task.instr_prompt if self.use_prompts else None
             if type(data_src) == dict:
-                data = datasets.load_dataset("json", data_files=data_src, streaming=True)[
+                data = datasets.load_dataset("json", data_files=data_src, streaming=False)[
                     next(iter(data_src.keys()))]
             else:
-                data = datasets.load_dataset(**data_src[0], split=data_src[1], streaming=True)
+                data = datasets.load_dataset(**data_src[0], split=data_src[1], streaming=False)
             kwargs = {"data": data, "ctrl_token": op_token, "instr_prompt": instr_prompt, "max_len": self.max_len, "task_name": t_name,
                       "tokenizer": self.tokenizer, "fields": task.input_fields,
                       "sample_size": task.sample_size[split] if type(task.sample_size) == dict else task.sample_size}
@@ -456,7 +456,7 @@ if __name__ == '__main__':
                          callbacks=callbacks,
                          precision="bf16-mixed",
                          fast_dev_run=args.fast_dev_run,
-                         log_every_n_steps=5,
+                         log_every_n_steps=8,
                          limit_train_batches=args.limit_train_batches,
                          limit_val_batches=args.limit_val_batches,
                          **hparams)
