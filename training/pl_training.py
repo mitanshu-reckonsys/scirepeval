@@ -5,6 +5,7 @@ import sys
 sys.path.append('../')
 
 import argparse
+import bitsandbytes as bnb
 from typing import Dict, Optional, Any
 from collections import defaultdict
 import datasets
@@ -49,7 +50,8 @@ class SciRepTrain(pl.LightningModule):
                  log_dir: str,
                  use_ctrl_tokens=False,
                  task_dict: Dict[str, TaskFamily] = None,
-                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, use_prompts=False, use_last_token=False, use_cosine_schedule=False):
+                 pals_cfg: str = None, adapter_type: str = None, max_len: int = 512, load_adapters_as=None, 
+                 use_prompts=False, use_last_token=False, use_cosine_schedule=False, use_8bit_optimmizer=False):
         super().__init__()
         self.task_dict = load_tasks() if not task_dict else task_dict
         print(self.task_dict.keys())
@@ -68,6 +70,7 @@ class SciRepTrain(pl.LightningModule):
         self.adapters = adapter_type is not None
         self.use_ctrl_tokens = use_ctrl_tokens
         self.use_last_token = use_last_token
+        self.use_8bit_optimizer = use_8bit_optimmizer
         spl_ctrl_tokens = set()
         for t in self.task_dict.values():
             if type(t.ctrl_token) == str:
@@ -142,9 +145,14 @@ class SciRepTrain(pl.LightningModule):
                 "weight_decay": 0.0,
             }
         ]
-        optimizer = torch.optim.AdamW(
+        if self.use_8bit_optimizer:
+            optimizer = bnb.optim.AdamW(
             optimizer_grouped_parameters, lr=self.init_lr, eps=1e-8
         )
+        else:
+            optimizer = torch.optim.AdamW(
+                optimizer_grouped_parameters, lr=self.init_lr, eps=1e-8
+            )
 
         self.opt = optimizer
 
@@ -439,7 +447,7 @@ if __name__ == '__main__':
                         use_ctrl_tokens=args.ctrl_tokens, task_dict=tasks_dict, pals_cfg=args.pals_config,
                         adapter_type=args.adapter_type, log_dir=filepath, max_len=args.max_len,
                         load_adapters_as=args.adapters_chkpt, use_prompts=args.instr_prompts, use_last_token=args.use_last_token, 
-                        use_cosine_schedule=args.use_cosine_schedule)
+                        use_cosine_schedule=args.use_cosine_schedule, use_8bit_optimmizer=args.use_8bit_optimizer)
 
     hparams = {"accelerator": "gpu" if args.gpu else "cpu", "devices": args.gpu if args.gpu else "auto",
                "val_check_interval": args.val_check_interval, "num_sanity_val_steps": 4,
