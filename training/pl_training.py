@@ -315,10 +315,10 @@ class SciRepTrain(pl.LightningModule):
             op_token = task.ctrl_token if self.use_ctrl_tokens else None
             instr_prompt = task.instr_prompt if self.use_prompts else None
             if type(data_src) == dict:
-                data = datasets.load_dataset("json", data_files=data_src, streaming=True)[
+                data = datasets.load_dataset("json", data_files=data_src, streaming=False)[
                     next(iter(data_src.keys()))]
             else:
-                data = datasets.load_dataset(**data_src[0], split=data_src[1], streaming=True)
+                data = datasets.load_dataset(**data_src[0], split=data_src[1], streaming=False)
             kwargs = {"data": data, "ctrl_token": op_token, "instr_prompt": instr_prompt, "max_len": self.max_len, "task_name": t_name,
                       "tokenizer": self.tokenizer, "fields": task.input_fields,
                       "sample_size": task.sample_size[split] if type(task.sample_size) == dict else task.sample_size}
@@ -393,6 +393,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint-n-steps', default=100, type=int, help='How often to save checkpoints in number of effective batches.')
     parser.add_argument('--use-last-token', default=False, action='store_true', help='Whether to use last token for pooling.')
     parser.add_argument('--use-cosine-schedule', default=False, action='store_true', help='Whether to use cosine decay for the learning rate scheduler. Defaults to inverse square root scheduler if False and not adapters or pals.')
+    parser.add_argument('--log-every-n-steps', default=10, type=int, help='How often to log step-wise values.')
     parser.add_argument('--training-strategy', default=None, type=str, help='Training strategy to use.')
 
     args = parser.parse_args()
@@ -456,7 +457,7 @@ if __name__ == '__main__':
                          callbacks=callbacks,
                          precision="bf16-mixed",
                          fast_dev_run=args.fast_dev_run,
-                         log_every_n_steps=5,
+                         log_every_n_steps=args.log_every_n_steps,
                          limit_train_batches=args.limit_train_batches,
                          limit_val_batches=args.limit_val_batches,
                          **hparams)
