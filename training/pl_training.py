@@ -457,7 +457,7 @@ if __name__ == '__main__':
                          callbacks=callbacks,
                          precision="bf16-mixed",
                          fast_dev_run=args.fast_dev_run,
-                         log_every_n_steps=args.log_every_n_steps,
+                         log_every_n_steps=8,
                          limit_train_batches=args.limit_train_batches,
                          limit_val_batches=args.limit_val_batches,
                          **hparams)
