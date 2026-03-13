@@ -395,6 +395,7 @@ if __name__ == '__main__':
     parser.add_argument('--use-cosine-schedule', default=False, action='store_true', help='Whether to use cosine decay for the learning rate scheduler. Defaults to inverse square root scheduler if False and not adapters or pals.')
     parser.add_argument('--log-every-n-steps', default=10, type=int, help='How often to log step-wise values.')
     parser.add_argument('--training-strategy', default=None, type=str, help='Training strategy to use.')
+    parser.add_argument('--use-8bit-optimizer', default=False, action='store_true', help='Whether to use 8bit optimizer instead of 32-bit')
 
     args = parser.parse_args()
     mconfig = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
@@ -457,7 +458,7 @@ if __name__ == '__main__':
                          callbacks=callbacks,
                          precision="bf16-mixed",
                          fast_dev_run=args.fast_dev_run,
-                         log_every_n_steps=8,
+                         log_every_n_steps=args.log_every_n_steps,
                          limit_train_batches=args.limit_train_batches,
                          limit_val_batches=args.limit_val_batches,
                          **hparams)
