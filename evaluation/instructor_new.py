@@ -451,7 +451,7 @@ class Voyage4Model(InstructorEmbeddingModel):
             # Load local nano model for query encoding
             self.query_encoder = SentenceTransformer(VOYAGE4_NANO_MODEL, trust_remote_code=True)
             self.query_encoder.max_seq_length = 512
-            self.tokenizer = None
+            self.tokenizer = AutoTokenizer.from_pretrained(f"voyageai/{embed_model}")
         else:
             if not SENTENCE_TRANSFORMERS_AVAILABLE:
                 raise ImportError(
