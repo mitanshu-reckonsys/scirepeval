@@ -29,6 +29,12 @@ try:
 except ImportError:
     VOYAGEAI_AVAILABLE = False
 
+try:
+    from ratelimit import limits, sleep_and_retry
+    RATELIMIT_AVAILABLE = True
+except ImportError:
+    RATELIMIT_AVAILABLE = False
+
 # Version requirements
 MIN_TRANSFORMERS_VERSION_QWEN3 = (4, 51, 0)
 MIN_TRANSFORMERS_VERSION_GEMMA = (4, 56, 0)
@@ -463,6 +469,8 @@ class Voyage4Model(InstructorEmbeddingModel):
             self.tokenizer = self.encoder.tokenizer
             self._setup_tokenizer_sep_token(self.tokenizer)
 
+    @sleep_and_retry
+    @limits(calls=3, period=60)
     def _embed_api(self, texts: List[str]) -> torch.Tensor:
         """Embed documents using the Voyage API."""
         result = self.client.embed(
