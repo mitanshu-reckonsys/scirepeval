@@ -21,7 +21,8 @@ from mtl_datasets import ClassificationDataset, multi_collate, MultiLabelClassif
     CustomChainDataset, TripletDataset, RegressionDataset
 from schedulers import InverseSquareRootSchedule, InverseSquareRootScheduleConfig
 from strategies import BatchingStrategy
-from tasks import TaskFamily, load_tasks, MultipleNegativesRankingLoss
+from sentence_transformers import SentenceTransformer
+from tasks import TaskFamily, load_tasks, GISTEmbedLoss
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -137,7 +138,7 @@ class SciRepTrain(pl.LightningModule):
         self.batching_strategy = batching_strategy
 
         # Store MNRL scales for later initialization in on_fit_start
-        self._mnrl_scales = {name: task.mnrl_scale for name, task in self.task_dict.items() if task.loss_type == "mnrl"}
+        self._mnrl_temps = {name: task.mnrl_temp for name, task in self.task_dict.items() if task.loss_type == "mnrl"}
         self._mnrl_losses = None  # Will be initialized in on_fit_start (not a Module, just a dict)
 
     def forward(self, input_ids, attention_mask=None, token_idx=0, task_id=None):
@@ -386,7 +387,7 @@ class SciRepTrain(pl.LightningModule):
         self.load_data("train")
 
     def on_fit_start(self) -> None:
-        if not self._mnrl_scales:
+        if not self._mnrl_temps:
             return  # No MNRL tasks, skip wrapper setup
 
         pooling_mode = 'lasttoken' if self.use_last_token else 'cls'
@@ -398,12 +399,16 @@ class SciRepTrain(pl.LightningModule):
             pooling_mode=pooling_mode
         )
 
-        # Initialize MNRL losses (plain dict, not ModuleDict - no learnable params)
+        # Load frozen guide model for false negative masking
+        guide_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+        # Initialize MNRL losses with false negative masking (plain dict, not ModuleDict - no learnable params)
         self._mnrl_losses = {}
-        for name, scale in self._mnrl_scales.items():
-            self._mnrl_losses[name] = MultipleNegativesRankingLoss(
+        for name, temp in self._mnrl_temps.items():
+            self._mnrl_losses[name] = GISTEmbedLoss(
                 model=self._encoder_wrapper,
-                scale=scale
+                guide=guide_model,
+                temperature=temp,
             )
 
     def train_dataloader(self) -> TRAIN_DATALOADERS:

@@ -4,13 +4,13 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 import json
-from sentence_transformers.losses import MultipleNegativesRankingLoss
+from sentence_transformers.losses import MultipleNegativesRankingLoss, GISTEmbedLoss
 
 
 class TaskFamily:
     def __init__(self, name, loss, type, dataset=None, data_files=None, multi_label=False, input_fields=None,
                  labels_field=None, labels=None, ctrl_token=None, head=None, contrastive_loss=None, sample_size=-1,
-                 instr_prompt=None, loss_type="triplet", mnrl_scale=20.0):
+                 instr_prompt=None, loss_type="triplet", mnrl_temp=0.01):
         if input_fields is None:
             input_fields = ["title", "abstract"]
         self.name = name
@@ -28,7 +28,7 @@ class TaskFamily:
         self.sample_size = sample_size
         self.instr_prompt = instr_prompt
         self.loss_type = loss_type
-        self.mnrl_scale = mnrl_scale
+        self.mnrl_temp = mnrl_temp
         if not self.dataset and not self.data_files:
             raise ValueError("Either dataset or data_files must be provided")
 
@@ -157,7 +157,7 @@ def load_tasks(tasks_config_file: str = "sample_data/tasks_config.json", hidden_
                 # Store config, MNRL will be instantiated in SciRepTrain
                 task["loss"] = None  # Placeholder - MNRL needs the model reference
                 task["loss_type"] = "mnrl"
-                task["mnrl_scale"] = task.get("mnrl_scale", 20.0)
+                task["mnrl_temp"] = task.get("mnrl_temp", 0.01)
             else:
                 task["loss"] = TripletLoss(reduction="none")
                 task["loss_type"] = "triplet"
