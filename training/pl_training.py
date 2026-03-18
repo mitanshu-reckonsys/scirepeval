@@ -51,9 +51,10 @@ class EncoderSentenceTransformerWrapper(torch.nn.Module):
     This wrapper references the encoder directly (no weight copying) so gradients
     flow back to self.encoder during training.
     """
-    def __init__(self, encoder, pooling_mode='cls'):
+    def __init__(self, encoder, tokenizer, pooling_mode='cls'):
         super().__init__()
         self.encoder = encoder  # Reference, not copy
+        self.tokenizer = tokenizer
         self.pooling_mode = pooling_mode
 
     def forward(self, features: dict) -> dict:
@@ -396,6 +397,7 @@ class SciRepTrain(pl.LightningModule):
         # Gradients will flow back to self.encoder during training
         self._encoder_wrapper = EncoderSentenceTransformerWrapper(
             encoder=self.encoder,
+            tokenizer=self.tokenizer,
             pooling_mode=pooling_mode
         )
 
