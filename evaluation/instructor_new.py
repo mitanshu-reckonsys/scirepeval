@@ -29,12 +29,6 @@ try:
 except ImportError:
     VOYAGEAI_AVAILABLE = False
 
-from tenacity import retry, wait_fixed, retry_if_exception
-
-
-def _is_voyage_rate_limit_error(exc: BaseException) -> bool:
-    return type(exc).__name__ == "RateLimitError"
-
 # Version requirements
 MIN_TRANSFORMERS_VERSION_QWEN3 = (4, 51, 0)
 MIN_TRANSFORMERS_VERSION_GEMMA = (4, 56, 0)
@@ -469,7 +463,6 @@ class Voyage4Model(InstructorEmbeddingModel):
             self.tokenizer = self.encoder.tokenizer
             self._setup_tokenizer_sep_token(self.tokenizer)
 
-    @retry(wait=wait_fixed(20), retry=retry_if_exception(_is_voyage_rate_limit_error))
     def _embed_api(self, texts: List[str]) -> torch.Tensor:
         """Embed documents using the Voyage API. Retries with 20s wait on rate limit errors."""
         result = self.client.embed(
