@@ -314,7 +314,7 @@ class Qwen3Model(InstructorEmbeddingModel):
     def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None):
         super().__init__(embed_model, "qwen3", task_prompts)
 
-        self.encoder = SentenceTransformer(embed_model)
+        self.encoder = SentenceTransformer(embed_model, truncate_dim=1024)
         self.tokenizer = AutoTokenizer.from_pretrained(self.embed_model)
 
         if ckpt_path:
@@ -456,8 +456,9 @@ class Voyage4Model(InstructorEmbeddingModel):
                 )
             self.client = voyageai.Client()
             self.doc_model = embed_model
+            self.doc_model.
             # Load local nano model for query encoding
-            self.query_encoder = SentenceTransformer(VOYAGE4_NANO_MODEL, trust_remote_code=True)
+            self.query_encoder = SentenceTransformer(VOYAGE4_NANO_MODEL, trust_remote_code=True, truncate_dim=1024)
             self.query_encoder.max_seq_length = 512
             self.tokenizer = AutoTokenizer.from_pretrained(f"voyageai/{embed_model}")
         else:
@@ -466,7 +467,7 @@ class Voyage4Model(InstructorEmbeddingModel):
                     "Voyage4 local mode requires sentence-transformers to be installed. "
                     "Please install: pip install sentence-transformers"
                 )
-            self.encoder = SentenceTransformer(embed_model, trust_remote_code=True)
+            self.encoder = SentenceTransformer(embed_model, trust_remote_code=True, truncate_dim=1024)
             self.encoder.max_seq_length = 512
             self.tokenizer = self.encoder.tokenizer
             self._setup_tokenizer_sep_token(self.tokenizer)
