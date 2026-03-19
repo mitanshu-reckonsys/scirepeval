@@ -108,6 +108,7 @@ class SciRepTrain(pl.LightningModule):
         self.val_losses = []
         self.task_val_losses = defaultdict(list)
         self.use_cosine_schedule = use_cosine_schedule
+        self.strict_loading = False
 
     def forward(self, input_ids, attention_mask=None, token_idx=0, task_id=None):
         if not self.pals:
