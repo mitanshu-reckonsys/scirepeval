@@ -201,6 +201,7 @@ if __name__ == "__main__":
     parser.add_argument('--task-specific-prompts', action='store_true')
     # Voyage4 API-specific arguments
     parser.add_argument('--voyage-api', action='store_true', default=False, help='Use Voyage API for docs (local nano for queries). Requires VOYAGE_API_KEY env var')
+    parser.add_argument('--truncate-dim', type=int, default=1024, help='Embedding truncation dimension for instructor models that support it (e.g. qwen3)')
 
     args = parser.parse_args()
     adapters_load_from = args.adapters_dir if args.adapters_dir else args.adapters_chkpt
@@ -215,12 +216,13 @@ if __name__ == "__main__":
                 args.model,
                 ckpt_path=args.checkpoint,
                 use_api=args.voyage_api,
+                truncate_dim=args.truncate_dim,
             )
         else:
             if not args.prompt_file or not os.path.exists(args.prompt_file):
                 raise ValueError("Instructor model requires JSON file with prompts to use.")
             task_prompts = load_prompts_from_file(args.prompt_file, args.prompt_name)
-            model = model_class_map[args.model_type](args.model, task_prompts, ckpt_path=args.checkpoint)
+            model = model_class_map[args.model_type](args.model, task_prompts, ckpt_path=args.checkpoint, truncate_dim=args.truncate_dim)
     else:
         model = Model(
             variant=args.mtype,
