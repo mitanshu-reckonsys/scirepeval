@@ -319,10 +319,18 @@ class Qwen3Model(InstructorEmbeddingModel):
 
         if ckpt_path:
             import torch
-            checkpoint = torch.load(ckpt_path, map_location='cuda', weights_only=False)
-            # Only extract encoder state_dict - ignore scheduler and other training state
-            encoder_state = {k.replace('encoder.', ''): v for k, v in checkpoint['state_dict'].items() if k.startswith('encoder.')}
-            self.encoder[0].auto_model.load_state_dict(encoder_state)
+            import os
+            if os.path.isdir(ckpt_path):
+                from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
+                state_dict = get_fp32_state_dict_from_zero_checkpoint(ckpt_path)
+                # Keys are like 'encoder.auto_model.layers...' depending on your LightningModule layout
+                encoder_state = {k.replace('encoder.', ''): v for k, v in state_dict.items() if k.startswith('encoder.')}
+                self.encoder[0].auto_model.load_state_dict(encoder_state)
+            else:
+                checkpoint = torch.load(ckpt_path, map_location='cuda', weights_only=False)
+                # Only extract encoder state_dict - ignore scheduler and other training state
+                encoder_state = {k.replace('encoder.', ''): v for k, v in checkpoint['state_dict'].items() if k.startswith('encoder.')}
+                self.encoder[0].auto_model.load_state_dict(encoder_state)
             
         self.encoder.max_seq_length = 512
         self._setup_tokenizer_sep_token(self.tokenizer)
