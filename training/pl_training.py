@@ -405,6 +405,7 @@ if __name__ == '__main__':
     parser.add_argument('--log-every-n-steps', default=10, type=int, help='How often to log step-wise values.')
     parser.add_argument('--training-strategy', default=None, type=str, help='Training strategy to use.')
     parser.add_argument('--use-8bit-optimizer', default=False, action='store_true', help='Whether to use 8bit optimizer instead of 32-bit')
+    parser.add_argument('--reset-optimizer', default=False, action='store_true', help='Load only model weights from checkpoint, discarding optimizer/scheduler state. Use when starting a new training stage from a fine-tuned checkpoint.')
 
     args = parser.parse_args()
     mconfig = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
@@ -473,4 +474,9 @@ if __name__ == '__main__':
                          **hparams)
     logger.log_hyperparams(hparams)
     logger.log_hyperparams({"tasks": {k: str(v) for k, v in tasks_dict.items()}})
-    trainer.fit(model, ckpt_path=args.checkpoint)
+    if args.checkpoint and args.reset_optimizer:
+        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        model.load_state_dict(checkpoint["state_dict"], strict=False)
+        trainer.fit(model)
+    else:
+        trainer.fit(model, ckpt_path=args.checkpoint)
