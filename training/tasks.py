@@ -4,13 +4,12 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 import json
-from sentence_transformers.losses import MultipleNegativesRankingLoss, GISTEmbedLoss
 
 
 class TaskFamily:
     def __init__(self, name, loss, type, dataset=None, data_files=None, multi_label=False, input_fields=None,
                  labels_field=None, labels=None, ctrl_token=None, head=None, contrastive_loss=None, sample_size=-1,
-                 instr_prompt=None, loss_type="triplet", mnrl_temp=0.01):
+                 instr_prompt=None):
         if input_fields is None:
             input_fields = ["title", "abstract"]
         self.name = name
@@ -27,8 +26,6 @@ class TaskFamily:
         self.input_fields = input_fields
         self.sample_size = sample_size
         self.instr_prompt = instr_prompt
-        self.loss_type = loss_type
-        self.mnrl_temp = mnrl_temp
         if not self.dataset and not self.data_files:
             raise ValueError("Either dataset or data_files must be provided")
 
@@ -151,15 +148,7 @@ def load_tasks(tasks_config_file: str = "sample_data/tasks_config.json", hidden_
             task["head"] = TaskHead(num_labels=1, dim=hidden_size)
             task["loss"] = nn.MSELoss(reduction="none")
         else:
-            # triplet or ir type - check for loss_type config
-            loss_type = task.get("loss_type", "triplet")
-            if loss_type == "mnrl":
-                # Store config, MNRL will be instantiated in SciRepTrain
-                task["loss"] = None  # Placeholder - MNRL needs the model reference
-                task["loss_type"] = "mnrl"
-                task["mnrl_temp"] = task.get("mnrl_temp", 0.01)
-            else:
-                task["loss"] = TripletLoss(reduction="none")
-                task["loss_type"] = "triplet"
+            # triplet or ir type
+            task["loss"] = TripletLoss(reduction="none")
         task_dict[task["name"]] = TaskFamily(**task)
     return task_dict
