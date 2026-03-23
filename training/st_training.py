@@ -10,7 +10,7 @@ import random
 import warnings
 import datasets
 from transformers import AutoConfig
-from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments
+from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments, models
 from sentence_transformers.losses import CachedGISTEmbedLoss
 from sentence_transformers.training_args import BatchSamplers, MultiDatasetBatchSamplers  # type: ignore[import]
 
@@ -169,7 +169,9 @@ def main():
     if not ir_tasks:
         raise ValueError("No IR/triplet tasks found in tasks config")
 
-    model = SentenceTransformer(args.model, trust_remote_code=True)
+    encoder = models.Transformer(args.model, trust_remote_code=True)
+    pooling = models.Pooling(encoder.get_word_embedding_dimension(), pooling_mode='cls')
+    model = SentenceTransformer(modules=[encoder, pooling], trust_remote_code=True)
     model.max_seq_length = args.max_len
 
     train_datasets, eval_datasets, losses = {}, {}, {}
