@@ -85,3 +85,49 @@ class IRDataset(SimpleDataset):
         for c, c_ids in cand_gen:
             c_ids = [(v, "c") for v in c_ids]
             yield c, c_ids
+
+
+class ParquetBinaryDataset(IRDataset):
+    """Dataset loader for flat Parquet files with binary (positive/negative) labels.
+
+    Each row has: task_id (query ID), query (query text), example_id (candidate ID),
+    quote_text (candidate text), label ("positive" or "negative").
+
+    Rows are grouped by task_id to reconstruct per-query candidate lists.
+    """
+
+    def __init__(self, data_path: str, sep_token: str, batch_size=32, fields=None, key=None, processing_fn=None):
+        # Skip SimpleDataset.__init__ — we build queries/candidates directly from Parquet rows
+        self.batch_size = batch_size
+        self.sep_token = sep_token
+        self.seen_ids = set()
+        self.key = key
+        self.fields = ["query", "quote"]
+
+        logger.info(f"Loading Parquet binary dataset from {data_path}")
+        raw = datasets.load_dataset("parquet", data_files={"dev": data_path}, split="dev")
+        logger.info(f"Loaded {len(raw)} rows")
+
+        # Group rows by task_id to build per-query candidate lists
+        seen_queries = {}  # task_id -> query text (first seen)
+        seen_candidates = set()  # example_ids already added
+
+        self.queries = []
+        self.candidates = []
+
+        for row in raw:
+            task_id = str(row["task_id"])
+            example_id = str(row["example_id"])
+
+            if task_id not in seen_queries:
+                seen_queries[task_id] = row["query"]
+                self.queries.append({"query": row["query"], "doc_id": task_id})
+
+            if example_id not in seen_candidates:
+                seen_candidates.add(example_id)
+                self.candidates.append({"quote": row["quote_text"], "doc_id": example_id})
+
+        logger.info(f"Built {len(self.queries)} queries and {len(self.candidates)} candidates")
+
+    def __len__(self):
+        return len(self.queries) + len(self.candidates)

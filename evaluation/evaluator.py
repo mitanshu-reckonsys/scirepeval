@@ -24,7 +24,7 @@ from sklearn.multiclass import OneVsRestClassifier
 from evaluation.embeddings_generator import EmbeddingsGenerator
 from abc import ABC, abstractmethod
 from evaluation.encoders import Model
-from evaluation.eval_datasets import SimpleDataset, IRDataset
+from evaluation.eval_datasets import SimpleDataset, IRDataset, ParquetBinaryDataset
 import logging
 import datasets
 import os
@@ -240,3 +240,40 @@ class IREvaluator(Evaluator):
                 for i, cid in enumerate(cids):
                     run[qid][cid] = float(-scores[i])
         return run
+
+
+class ParquetBinaryIREvaluator(IREvaluator):
+    """IREvaluator for flat Parquet datasets with binary (positive/negative) labels.
+
+    Loads the test split from S3 Parquet files and builds qrels from task_id / example_id / label fields.
+    All ranking and metric computation is inherited from IREvaluator.
+    """
+
+    def __init__(self, name: str, meta_dataset: str, test_dataset: str, model, metrics: tuple,
+                 batch_size: int = 16, fields: list = None):
+        # Pass meta_dataset to parent but use ParquetBinaryDataset for embedding generation
+        super(IREvaluator, self).__init__(name, meta_dataset, ParquetBinaryDataset, model, batch_size, fields)
+        self.test_dataset = test_dataset
+        self.metrics = metrics
+
+    def evaluate(self, embeddings, **kwargs):
+        logger.info(f"Loading labelled data from {self.test_dataset}")
+        raw = datasets.load_dataset("parquet", data_files={"dev": self.test_dataset}, split="dev")
+        logger.info(f"Loaded {len(raw)} test rows")
+
+        if type(embeddings) == str and os.path.isfile(embeddings):
+            embeddings = EmbeddingsGenerator.load_embeddings_from_jsonl(embeddings)
+
+        qrels = {}
+        for row in raw:
+            task_id = str(row["task_id"])
+            example_id = str(row["example_id"])
+            score = 1 if row["label"] == "positive" else 0
+            if task_id not in qrels:
+                qrels[task_id] = {}
+            qrels[task_id][example_id] = score
+
+        preds = self.retrieval(embeddings, qrels)
+        results = self.calc_metrics(qrels, preds)
+        self.print_results(results)
+        return results

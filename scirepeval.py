@@ -4,7 +4,7 @@ from typing import List, Union
 import importlib.metadata
 
 from evaluation.encoders import Model
-from evaluation.evaluator import IREvaluator, SupervisedEvaluator, SupervisedTask
+from evaluation.evaluator import IREvaluator, SupervisedEvaluator, SupervisedTask, ParquetBinaryIREvaluator
 from evaluation.few_shot_evaluator import FewShotEvaluator
 from evaluation.gpt3_encoder import GPT3Model
 import gc
@@ -48,7 +48,8 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 TASK_IDS = {"classification": "[CLF]", "regression": "[RGN]", "proximity": "[PRX]",
-            "adhoc_search": {"query": "[QRY]", "candidates": "[PRX]"}}
+            "adhoc_search": {"query": "[QRY]", "candidates": "[PRX]"},
+            "binary_retrieval": "[PRX]"}
 model_class_map = {"gemma": GemmaModel, "qwen3": Qwen3Model, "gritlm": GritLMModel, "f2llm": F2LLMModel, "voyage4": Voyage4Model}
 
 import pytorch_lightning as pl
@@ -59,7 +60,7 @@ pl.seed_everything(42, workers=True)
 class SciRepEval:
 
     def __init__(self, tasks_config: str = "scirepeval_tasks.jsonl", task_list: List[str] = None,
-                 task_formats: List[str] = None, batch_size: int = 32, embedding_save_path = None, excluded_tasks: List[str] = None, task_specific_prompts: bool = False):
+                 task_formats: List[str] = None, batch_size: int = 32, embedding_save_path = None, excluded_tasks: List[str] = None, task_specific_prompts: bool = False, s3_base_path: str = None):
         tasks_dict = dict()
         task_by_formats = dict()
         with open(tasks_config, encoding="utf-8") as f:
@@ -81,6 +82,7 @@ class SciRepEval:
         self.batch_size = batch_size
         self.embedding_save_path = embedding_save_path
         self.task_specifc_prompts = task_specific_prompts
+        self.s3_base_path = s3_base_path
 
     def evaluate(self, model: Union[Model, List[Model]], output: str):
         final_results = dict()
@@ -94,20 +96,21 @@ class SciRepEval:
                         m.task_name = task_name
                 kwargs = dict()
                 task_data = task["data"]
-                if not task_data.get("meta"):
-                    raise ValueError(f"Task {task_name} has no test metadata")
-                if task_data.get("meta"):
-                    metadata = task_data["meta"]
-                    kwargs["meta_dataset"] = metadata if type(metadata) != dict else (metadata["name"], metadata["config"])
+                if task["type"] != "binary_retrieval":
+                    if not task_data.get("meta"):
+                        raise ValueError(f"Task {task_name} has no test metadata")
+                    if task_data.get("meta"):
+                        metadata = task_data["meta"]
+                        kwargs["meta_dataset"] = metadata if type(metadata) != dict else (metadata["name"], metadata["config"])
 
-                if not task_data.get("test"):
-                    if type(metadata) == dict:
-                        kwargs["test_dataset"] = (metadata["name"], metadata["config"])
-                    else:
-                        raise ValueError(f"Task {task_name} has no test data")
-                if task_data.get("test"):
-                    testdata = task_data["test"]
-                    kwargs["test_dataset"] = testdata if type(testdata) != dict else (testdata["name"], testdata["config"])
+                    if not task_data.get("test"):
+                        if type(metadata) == dict:
+                            kwargs["test_dataset"] = (metadata["name"], metadata["config"])
+                        else:
+                            raise ValueError(f"Task {task_name} has no test data")
+                    if task_data.get("test"):
+                        testdata = task_data["test"]
+                        kwargs["test_dataset"] = testdata if type(testdata) != dict else (testdata["name"], testdata["config"])
 
                 kwargs["metrics"] = tuple(task["metrics"])
 
@@ -138,7 +141,22 @@ class SciRepEval:
                                                  sample_size=run["sample_size"], num_iterations=run["iterations"],
                                                  **kwargs))
                 else:
-                    if task_name == "Paper-Reviewer Matching":
+                    if task["type"] == "binary_retrieval":
+                        if not self.s3_base_path:
+                            raise ValueError(f"Task {task_name} requires --s3-base-path to be set")
+                        source = task_data.get("source")
+                        split = task_data.get("split", "test")
+                        s3_glob = f"{self.s3_base_path.rstrip('/')}/{source}/split={split}/*.parquet"
+                        evaluator = ParquetBinaryIREvaluator(
+                            task_name,
+                            meta_dataset=s3_glob,
+                            test_dataset=s3_glob,
+                            model=model,
+                            metrics=kwargs["metrics"],
+                            batch_size=kwargs["batch_size"],
+                            fields=kwargs.get("fields"),
+                        )
+                    elif task_name == "Paper-Reviewer Matching":
                         if not task_data.get("reviewers") and not task_data.get("hf_reviewers"):
                             raise ValueError(f"Task {task_name} has no reviewer metadata locally or hf_metadata")
                         if task_data.get("reviewers"):
@@ -202,6 +220,7 @@ if __name__ == "__main__":
     # Voyage4 API-specific arguments
     parser.add_argument('--voyage-api', action='store_true', default=False, help='Use Voyage API for docs (local nano for queries). Requires VOYAGE_API_KEY env var')
     parser.add_argument('--truncate-dim', type=int, default=1024, help='Embedding truncation dimension for instructor models that support it (e.g. qwen3)')
+    parser.add_argument('--s3-base-path', type=str, default=None, help='S3 base path for binary_retrieval tasks (e.g. s3://bucket/prefix/). pf/sqa sub-paths are appended automatically.')
 
     args = parser.parse_args()
     adapters_load_from = args.adapters_dir if args.adapters_dir else args.adapters_chkpt
@@ -235,5 +254,5 @@ if __name__ == "__main__":
             pooling_mode=args.pooling_mode,
             use_fp16=args.fp16
         )
-    evaluator = SciRepEval(tasks_config=args.tasks_config, batch_size=args.batch_size, embedding_save_path=args.embeddings_save_path, excluded_tasks=args.excluded_tasks, task_formats=args.task_formats, task_list=args.task_list, task_specific_prompts=args.task_specific_prompts)
+    evaluator = SciRepEval(tasks_config=args.tasks_config, batch_size=args.batch_size, embedding_save_path=args.embeddings_save_path, excluded_tasks=args.excluded_tasks, task_formats=args.task_formats, task_list=args.task_list, task_specific_prompts=args.task_specific_prompts, s3_base_path=args.s3_base_path)
     evaluator.evaluate(model, args.output)
