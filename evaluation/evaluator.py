@@ -258,7 +258,10 @@ class ParquetBinaryIREvaluator(IREvaluator):
 
     def evaluate(self, embeddings, **kwargs):
         logger.info(f"Loading labelled data from {self.test_dataset}")
-        raw = datasets.load_dataset("parquet", data_files={"dev": self.test_dataset}, split="dev")
+        import s3fs, pandas as pd
+        fs = s3fs.S3FileSystem(anon=False)
+        files = fs.glob(self.test_dataset.replace("s3://", ""))
+        raw = datasets.Dataset.from_pandas(pd.concat([pd.read_parquet(fs.open(f)) for f in files], ignore_index=True))
         logger.info(f"Loaded {len(raw)} test rows")
 
         if type(embeddings) == str and os.path.isfile(embeddings):

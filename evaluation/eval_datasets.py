@@ -105,7 +105,10 @@ class ParquetBinaryDataset(IRDataset):
         self.fields = ["query", "quote"]
 
         logger.info(f"Loading Parquet binary dataset from {data_path}")
-        raw = datasets.load_dataset("parquet", data_files={"dev": data_path}, split="dev")
+        import s3fs, pandas as pd
+        fs = s3fs.S3FileSystem(anon=False)
+        files = fs.glob(data_path.replace("s3://", ""))
+        raw = datasets.Dataset.from_pandas(pd.concat([pd.read_parquet(fs.open(f)) for f in files], ignore_index=True))
         logger.info(f"Loaded {len(raw)} rows")
 
         # Group rows by task_id to build per-query candidate lists
