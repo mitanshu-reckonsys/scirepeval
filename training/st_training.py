@@ -41,7 +41,10 @@ def build_st_dataset(
     fields = task.input_fields
 
     def _text(doc: dict) -> str:
-        parts = [str(doc[f]) for f in fields if doc.get(f)]
+        if isinstance(doc, dict):
+            parts = [str(doc[f]) for f in fields if doc.get(f)]
+        else:
+            parts = [doc]
         return sep.join(parts)
 
     def _neg_cols(neg_texts: list[str]) -> dict:
@@ -91,9 +94,8 @@ def build_st_dataset(
         pos_pool = g["positives"]
         neg_pool = g["negatives"]
         n_pos = min(num_positives, len(pos_pool))
-        n_neg = min(num_negatives, len(neg_pool))
         chosen_pos = random.sample(pos_pool, n_pos)
-        chosen_neg = random.sample(neg_pool, n_neg)
+        chosen_neg = random.sample(neg_pool, num_negatives) if len(neg_pool) >= num_negatives else random.choices(neg_pool, k=num_negatives)
         for pos_text in chosen_pos:
             row = {"anchor": g["query"], "positive": pos_text}
             row.update(_neg_cols(chosen_neg))
@@ -106,14 +108,13 @@ def build_loss(
     model: SentenceTransformer,
     temperature: float,
     mini_batch_size: int,
-    guide_model: str,
+    guide_model: SentenceTransformer,
     contrast_anchors: bool,
     contrast_positives: bool,
 ) -> CachedGISTEmbedLoss:
-    guide = SentenceTransformer(guide_model)
     return CachedGISTEmbedLoss(
         model=model,
-        guide=guide,
+        guide=guide_model,
         temperature=temperature,
         mini_batch_size=mini_batch_size,
         contrast_anchors=contrast_anchors,
@@ -158,8 +159,10 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=8)
     parser.add_argument("--max-len", type=int, default=512)
     parser.add_argument("--val-check-interval", type=int, default=500, help="Eval every N steps")
-    parser.add_argument("--checkpoint-n-steps", type=int, default=100)
+    parser.add_argument("--checkpoint-n-steps", type=int, default=500)
     parser.add_argument("--use-cosine-schedule", action="store_true", default=False)
+    parser.add_argument('--guide-model-pooling', type=str, choices=['cls', 'lasttoken', 'max', 'mean'], default="cls")
+    parser.add_argument('--model-pooling', type=str, choices=['cls', 'lasttoken', 'max', 'mean'], default="lasttoken")
     args = parser.parse_args()
 
     mconfig = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
@@ -169,8 +172,13 @@ def main():
     if not ir_tasks:
         raise ValueError("No IR/triplet tasks found in tasks config")
 
-    encoder = models.Transformer(args.model, trust_remote_code=True)
-    pooling = models.Pooling(encoder.get_word_embedding_dimension(), pooling_mode='cls')
+    encoder = models.Transformer(args.guide_model, model_args={"trust_remote_code":True})
+    pooling = models.Pooling(encoder.get_word_embedding_dimension(), pooling_mode=args.guide_model_pooling)
+    guide_model = SentenceTransformer(modules=[encoder, pooling], trust_remote_code=True)
+    guide_model.max_seq_length = args.max_len
+
+    model = SentenceTransformer(args.model)
+    pooling = models.Pooling(encoder.get_word_embedding_dimension(), pooling_mode=args.model_pooling)
     model = SentenceTransformer(modules=[encoder, pooling], trust_remote_code=True)
     model.max_seq_length = args.max_len
 
@@ -178,7 +186,7 @@ def main():
     for name, task in ir_tasks.items():
         train_datasets[name] = build_st_dataset(task, "train", args.num_negatives, args.num_positives, args.queries_per_dataset)
         eval_datasets[name] = build_st_dataset(task, "dev", args.num_negatives, args.num_positives, args.queries_per_dataset)
-        losses[name] = build_loss(model, args.temperature, args.mini_batch_size, args.guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
+        losses[name] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
 
     lr_scheduler = "cosine" if args.use_cosine_schedule else "linear"
     warmup = args.warmup if args.warmup < 1 else int(args.warmup)
@@ -207,8 +215,9 @@ def main():
         batch_sampler=BatchSamplers.NO_DUPLICATES,
         multi_dataset_batch_sampler=MultiDatasetBatchSamplers.PROPORTIONAL,
         prompts=build_prompts(ir_tasks, args.num_negatives),
+        push_to_hub=False
     )
-
+    model.model_card_data.widget = []
     trainer = SentenceTransformerTrainer(
         model=model,
         args=training_args,
