@@ -188,6 +188,10 @@ def main():
         eval_datasets[name] = build_st_dataset(task, "dev", args.num_negatives, args.num_positives, args.queries_per_dataset)
         losses[name] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
 
+    merged_eval = datasets.concatenate_datasets(list(eval_datasets.values()))
+    eval_datasets["all"] = merged_eval
+    losses["all"] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
+
     lr_scheduler = "cosine" if args.use_cosine_schedule else "linear"
     warmup = args.warmup if args.warmup < 1 else int(args.warmup)
 
@@ -208,7 +212,7 @@ def main():
         save_steps=args.checkpoint_n_steps,
         save_total_limit=4,
         load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
+        metric_for_best_model="eval_all_loss",
         logging_steps=10,
         dataloader_num_workers=1,
         dataloader_pin_memory=True,
