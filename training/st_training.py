@@ -215,7 +215,8 @@ def main():
         batch_sampler=BatchSamplers.NO_DUPLICATES,
         multi_dataset_batch_sampler=MultiDatasetBatchSamplers.PROPORTIONAL,
         prompts=build_prompts(ir_tasks, args.num_negatives),
-        push_to_hub=False
+        push_to_hub=False,
+        dataloader_drop_last=True
     )
     model.model_card_data.widget = []
     trainer = SentenceTransformerTrainer(
