@@ -170,6 +170,8 @@ def main():
     parser.add_argument("--max-len", type=int, default=512)
     parser.add_argument("--val-check-interval", type=int, default=500, help="Eval every N steps")
     parser.add_argument("--checkpoint-n-steps", type=int, default=500)
+    parser.add_argument("--max-steps", type=int, default=-1, help="Cap total training steps; -1 means no limit")
+    parser.add_argument("--max-eval-samples", type=int, default=None, help="Truncate each eval dataset to N samples for quick runs")
     parser.add_argument("--use-cosine-schedule", action="store_true", default=False)
     parser.add_argument('--guide-model-pooling', type=str, choices=['cls', 'lasttoken', 'max', 'mean'], default="cls")
     parser.add_argument('--model-pooling', type=str, choices=['cls', 'lasttoken', 'max', 'mean'], default="lasttoken")
@@ -195,7 +197,10 @@ def main():
     train_datasets, eval_datasets, losses = {}, {}, {}
     for name, task in ir_tasks.items():
         train_datasets[name] = build_st_dataset(task, "train", args.num_negatives, args.num_positives, args.queries_per_dataset)
-        eval_datasets[name] = build_st_dataset(task, "dev", args.num_negatives, args.num_positives, args.queries_per_dataset)
+        eval_ds = build_st_dataset(task, "dev", args.num_negatives, args.num_positives, args.queries_per_dataset)
+        if args.max_eval_samples is not None:
+            eval_ds = eval_ds.select(range(min(args.max_eval_samples, len(eval_ds))))
+        eval_datasets[name] = eval_ds
         losses[name] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
 
 
@@ -212,6 +217,7 @@ def main():
         warmup_ratio=warmup if isinstance(warmup, float) else 0.0,
         warmup_steps=warmup if isinstance(warmup, int) else 0,
         lr_scheduler_type=lr_scheduler,
+        max_steps=args.max_steps,
         bf16=True,
         eval_strategy="steps",
         eval_steps=args.val_check_interval,
