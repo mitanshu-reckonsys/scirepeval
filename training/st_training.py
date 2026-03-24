@@ -139,6 +139,16 @@ def build_prompts(ir_tasks: dict, num_negatives: int = 1) -> dict | None:
     return training_prompts if training_prompts else None
 
 
+class AvgLossTrainer(SentenceTransformerTrainer):
+    def evaluate(self, *args, **kwargs):
+        metrics = super().evaluate(*args, **kwargs)
+        losses = [v for k, v in metrics.items() if k.endswith("_loss")]
+        if losses:
+            metrics["eval_all_loss"] = sum(losses) / len(losses)
+            self.log({"eval_all_loss": metrics["eval_all_loss"]})
+        return metrics
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("model", help="HuggingFace model or ST model name")
@@ -188,9 +198,6 @@ def main():
         eval_datasets[name] = build_st_dataset(task, "dev", args.num_negatives, args.num_positives, args.queries_per_dataset)
         losses[name] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
 
-    merged_eval = datasets.concatenate_datasets(list(eval_datasets.values()))
-    eval_datasets["all"] = merged_eval
-    losses["all"] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
 
     lr_scheduler = "cosine" if args.use_cosine_schedule else "linear"
     warmup = args.warmup if args.warmup < 1 else int(args.warmup)
@@ -223,7 +230,7 @@ def main():
         dataloader_drop_last=True
     )
     model.model_card_data.widget = []
-    trainer = SentenceTransformerTrainer(
+    trainer = AvgLossTrainer(
         model=model,
         args=training_args,
         train_dataset=train_datasets,
