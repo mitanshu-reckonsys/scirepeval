@@ -9,7 +9,7 @@ import argparse
 import random
 import warnings
 import datasets
-from transformers import AutoConfig
+from transformers import AutoConfig, TrainerCallback, TrainerControl, TrainerState
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments, models
 from sentence_transformers.losses import CachedGISTEmbedLoss
 from sentence_transformers.training_args import BatchSamplers, MultiDatasetBatchSamplers  # type: ignore[import]
@@ -139,15 +139,15 @@ def build_prompts(ir_tasks: dict, num_negatives: int = 1) -> dict | None:
     return training_prompts if training_prompts else None
 
 
-class AvgLossTrainer(SentenceTransformerTrainer):
-    def evaluate(self, *args, **kwargs):
-        metrics = super().evaluate(*args, **kwargs)
-        losses = [v for k, v in metrics.items() if k.endswith("_loss")]
+class AvgEvalLossCallback(TrainerCallback):
+    def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics: dict, **kwargs):
+        if not state.is_world_process_zero:
+            return
+        losses = [v for k, v in metrics.items() if k.endswith("_loss") and k != "eval_all_loss"]
         if losses:
-            metrics["eval_all_loss"] = sum(losses) / len(losses)
-            self.log({"eval_all_loss": metrics["eval_all_loss"]})
-        return metrics
-
+            avg = sum(losses) / len(losses)
+            metrics["eval_all_loss"] = avg
+            self.trainer.log({"eval_all_loss": avg})
 
 def main():
     parser = argparse.ArgumentParser()
@@ -225,7 +225,7 @@ def main():
         save_steps=args.checkpoint_n_steps,
         save_total_limit=4,
         load_best_model_at_end=True,
-        metric_for_best_model="eval_all_loss",
+        metric_for_best_model="eval_specter_loss",
         logging_steps=10,
         dataloader_num_workers=1,
         dataloader_pin_memory=True,
@@ -236,12 +236,13 @@ def main():
         dataloader_drop_last=True
     )
     model.model_card_data.widget = []
-    trainer = AvgLossTrainer(
+    trainer = SentenceTransformerTrainer(
         model=model,
         args=training_args,
         train_dataset=train_datasets,
         eval_dataset=eval_datasets,
         loss=losses,
+        callbacks=[AvgEvalLossCallback()],
     )
     trainer.train()
     model.save_pretrained(f"{args.output}/final_model")
