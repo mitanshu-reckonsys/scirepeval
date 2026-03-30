@@ -16,7 +16,7 @@ torchaudio>=0.13.0,<0.14.0
 
 # Core ML libraries - OLD VERSIONS
 transformers>=4.35.0,<4.40.0  # Must be <4.40 for adapters compatibility
-tokenizers>=0.13.0,<0.15.0
+tokenizers>=0.13.0,<=0.15.0
 huggingface-hub>=0.16.0,<0.20.0
 
 # Datasets - OLD VERSION (supports loading scripts)
