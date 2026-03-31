@@ -49,7 +49,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 TASK_IDS = {"classification": "[CLF]", "regression": "[RGN]", "proximity": "[PRX]",
             "adhoc_search": {"query": "[QRY]", "candidates": "[PRX]"},
-            "binary_retrieval": "[PRX]"}
+            "binary_retrieval": {"query": "[QRY]", "candidates": "[PRX]"}}
 model_class_map = {"gemma": GemmaModel, "qwen3": Qwen3Model, "gritlm": GritLMModel, "f2llm": F2LLMModel, "voyage4": Voyage4Model}
 
 import pytorch_lightning as pl
