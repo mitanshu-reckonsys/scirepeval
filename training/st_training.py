@@ -9,6 +9,7 @@ import argparse
 import random
 import warnings
 import datasets
+from datasets import DatasetDict
 from transformers import AutoConfig
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments, models
 from sentence_transformers.losses import CachedGISTEmbedLoss
@@ -230,7 +231,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_datasets,
-        eval_dataset=eval_datasets,
+        eval_dataset=DatasetDict(eval_datasets),
         loss=losses,
     )
     trainer.train()
