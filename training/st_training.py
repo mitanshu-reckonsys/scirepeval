@@ -9,7 +9,7 @@ import argparse
 import random
 import warnings
 import datasets
-from transformers import AutoConfig, TrainerCallback, TrainerControl, TrainerState
+from transformers import AutoConfig
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments, models
 from sentence_transformers.losses import CachedGISTEmbedLoss
 from sentence_transformers.training_args import BatchSamplers, MultiDatasetBatchSamplers  # type: ignore[import]
@@ -139,16 +139,6 @@ def build_prompts(ir_tasks: dict, num_negatives: int = 1) -> dict | None:
     return training_prompts if training_prompts else None
 
 
-class AvgEvalLossCallback(TrainerCallback):
-    def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics: dict, **kwargs):
-        if not state.is_world_process_zero:
-            return
-        losses = [v for k, v in metrics.items() if k.endswith("_loss") and k != "eval_all_loss"]
-        if losses:
-            avg = sum(losses) / len(losses)
-            metrics["eval_all_loss"] = avg
-            self.trainer.log({"eval_all_loss": avg})
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("model", help="HuggingFace model or ST model name")
@@ -242,7 +232,6 @@ def main():
         train_dataset=train_datasets,
         eval_dataset=eval_datasets,
         loss=losses,
-        callbacks=[AvgEvalLossCallback()],
     )
     trainer.train()
     model.save_pretrained(f"{args.output}/final_model")
