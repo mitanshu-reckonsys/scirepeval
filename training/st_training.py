@@ -179,7 +179,7 @@ def main():
     guide_model = SentenceTransformer(modules=[encoder, pooling], trust_remote_code=True)
     guide_model.max_seq_length = args.max_len
 
-    model = SentenceTransformer(args.model)
+    encoder = SentenceTransformer(args.model)
     pooling = models.Pooling(encoder.get_word_embedding_dimension(), pooling_mode=args.model_pooling)
     model = SentenceTransformer(modules=[encoder, pooling], trust_remote_code=True)
     model.max_seq_length = args.max_len
