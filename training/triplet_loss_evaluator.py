@@ -56,4 +56,5 @@ class TripletLossEvaluator(SentenceEvaluator):
         mean_loss = all_losses.mean().item()
 
         print(f"[{self.name}] triplet_loss={mean_loss:.4f} (epoch={epoch}, steps={steps})")
-        return -mean_loss
+        self.primary_metric = f"{self.name}_triplet_loss"
+        return {self.primary_metric: mean_loss}

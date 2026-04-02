@@ -195,7 +195,7 @@ def main():
             eval_ds = eval_ds.select(range(min(args.max_eval_samples, len(eval_ds))))
         evaluators.append(TripletLossEvaluator(eval_ds=eval_ds, name=name))
         losses[name] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
-    evaluator = SequentialEvaluator(evaluators)
+    evaluator = SequentialEvaluator(evaluators, main_score_function=lambda scores: sum(scores) / len(scores))
 
 
     lr_scheduler = "cosine" if args.use_cosine_schedule else "linear"
@@ -220,6 +220,7 @@ def main():
         save_total_limit=4,
         load_best_model_at_end=True,
         metric_for_best_model="eval_sequential_score",
+        greater_is_better=False,
         logging_steps=10,
         dataloader_num_workers=1,
         dataloader_pin_memory=True,
