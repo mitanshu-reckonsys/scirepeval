@@ -126,8 +126,8 @@ class ParquetBinaryDataset(IRDataset):
             if task_id not in seen_queries:
                 if max_samples is not None and len(seen_queries) >= max_samples:
                     continue
-                seen_queries[task_id] = row["query"]
-                self.queries.append({"query": row["query"], "doc_id": task_id})
+                seen_queries[task_id] = row.get("canonical_query", row["query"])
+                self.queries.append({"query": row.get("canonical_query", row["query"]), "doc_id": task_id})
                 self.qrels[task_id] = {}
 
             if task_id in seen_queries:
