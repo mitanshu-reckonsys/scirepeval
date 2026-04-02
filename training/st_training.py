@@ -12,10 +12,12 @@ import datasets
 from datasets import DatasetDict
 from transformers import AutoConfig
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments, models
+from sentence_transformers.evaluation import SequentialEvaluator
 from sentence_transformers.losses import CachedGISTEmbedLoss
 from sentence_transformers.training_args import BatchSamplers, MultiDatasetBatchSamplers  # type: ignore[import]
 
 from tasks import load_tasks, TaskFamily
+from triplet_loss_evaluator import TripletLossEvaluator
 
 
 def build_st_dataset(
@@ -185,14 +187,15 @@ def main():
     model = SentenceTransformer(modules=[encoder, pooling], trust_remote_code=True)
     model.max_seq_length = args.max_len
 
-    train_datasets, eval_datasets, losses = {}, {}, {}
+    train_datasets, evaluators, losses = {}, [], {}
     for name, task in ir_tasks.items():
         train_datasets[name] = build_st_dataset(task, "train", args.num_negatives, args.num_positives, args.queries_per_dataset)
         eval_ds = build_st_dataset(task, "dev", args.num_negatives, args.num_positives, args.queries_per_dataset)
         if args.max_eval_samples is not None:
             eval_ds = eval_ds.select(range(min(args.max_eval_samples, len(eval_ds))))
-        eval_datasets[name] = eval_ds
+        evaluators.append(TripletLossEvaluator(eval_ds=eval_ds, name=name))
         losses[name] = build_loss(model, args.temperature, args.mini_batch_size, guide_model, not args.no_contrast_anchors, not args.no_contrast_positives)
+    evaluator = SequentialEvaluator(evaluators)
 
 
     lr_scheduler = "cosine" if args.use_cosine_schedule else "linear"
@@ -216,7 +219,7 @@ def main():
         save_steps=args.checkpoint_n_steps,
         save_total_limit=4,
         load_best_model_at_end=True,
-        metric_for_best_model="eval_specter_loss",
+        metric_for_best_model="eval_sequential_score",
         logging_steps=10,
         dataloader_num_workers=1,
         dataloader_pin_memory=True,
@@ -231,7 +234,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=DatasetDict(train_datasets),
-        eval_dataset=DatasetDict(eval_datasets),
+        evaluator=evaluator,
         loss=losses,
     )
     trainer.train()
