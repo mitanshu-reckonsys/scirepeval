@@ -16,7 +16,7 @@ except ImportError:
         "For faster training with large datasets, install sklearn-contrib-lightning in old models environment."
     )
 
-from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, mean_squared_error, r2_score
+from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, mean_squared_error, r2_score, roc_auc_score
 from scipy.stats import kendalltau, pearsonr
 from sklearn.model_selection import GridSearchCV
 from sklearn.multiclass import OneVsRestClassifier
@@ -199,12 +199,14 @@ class IREvaluator(Evaluator):
                 pairs[row["query_id"]][row["cand_id"]] = row["score"]
         return pairs
 
-    def calc_metrics(self, qrels, run):
-        evaluator = pytrec_eval.RelevanceEvaluator(qrels, set(self.metrics))
+    def calc_metrics(self, qrels, run, metrics=None):
+        if metrics is None:
+            metrics = self.metrics
+        evaluator = pytrec_eval.RelevanceEvaluator(qrels, set(metrics))
         results = evaluator.evaluate(run)
 
         metric_values = {}
-        for measure in sorted(self.metrics):
+        for measure in sorted(metrics):
             res = pytrec_eval.compute_aggregated_measure(
                 measure,
                 [query_measures[measure] for query_measures in results.values()]
@@ -250,33 +252,41 @@ class ParquetBinaryIREvaluator(IREvaluator):
     """
 
     def __init__(self, name: str, meta_dataset: str, test_dataset: str, model, metrics: tuple,
-                 batch_size: int = 16, fields: list = None):
-        # Pass meta_dataset to parent but use ParquetBinaryDataset for embedding generation
-        super(IREvaluator, self).__init__(name, meta_dataset, ParquetBinaryDataset, model, batch_size, fields)
+                 batch_size: int = 16, fields: list = None, max_samples: int = None):
+        from functools import partial
+        dataset_class = partial(ParquetBinaryDataset, max_samples=max_samples) if max_samples else ParquetBinaryDataset
+        super(IREvaluator, self).__init__(name, meta_dataset, dataset_class, model, batch_size, fields)
         self.test_dataset = test_dataset
         self.metrics = metrics
+        self.max_samples = max_samples
 
     def evaluate(self, embeddings, **kwargs):
-        logger.info(f"Loading labelled data from {self.test_dataset}")
-        import s3fs, pandas as pd
-        fs = s3fs.S3FileSystem(anon=False)
-        files = fs.glob(self.test_dataset.replace("s3://", ""))
-        raw = datasets.Dataset.from_pandas(pd.concat([pd.read_parquet(fs.open(f)) for f in files], ignore_index=True))
-        logger.info(f"Loaded {len(raw)} test rows")
-
         if type(embeddings) == str and os.path.isfile(embeddings):
             embeddings = EmbeddingsGenerator.load_embeddings_from_jsonl(embeddings)
 
-        qrels = {}
-        for row in raw:
-            task_id = str(row["task_id"])
-            example_id = str(row["example_id"])
-            score = 1 if row["label"] == "positive" else 0
-            if task_id not in qrels:
-                qrels[task_id] = {}
-            qrels[task_id][example_id] = score
+        qrels = self.embeddings_generator.datasets[0].qrels
+        logger.info(f"Using qrels from dataset: {len(qrels)} queries")
 
         preds = self.retrieval(embeddings, qrels)
-        results = self.calc_metrics(qrels, preds)
+
+        compute_auc = "auc" in self.metrics
+        pytrec_metrics = tuple(m for m in self.metrics if m != "auc")
+        results = self.calc_metrics(qrels, preds, pytrec_metrics)
+
+        if compute_auc:
+            y_true, y_score = [], []
+            for qid, cands in qrels.items():
+                if qid not in preds:
+                    continue
+                for cid, label in cands.items():
+                    if cid in preds[qid]:
+                        y_true.append(label)
+                        y_score.append(preds[qid][cid])
+            if not y_true:
+                logger.warning("AUC skipped: no overlapping IDs between embeddings and qrels.")
+                results["auc"] = None
+            else:
+                results["auc"] = np.round(100 * roc_auc_score(y_true, y_score), 2)
+
         self.print_results(results)
         return results

@@ -1,2 +1,2 @@
-{"name":"PF Quote Retrieval","type":"binary_retrieval","data":{"source":"pf","split":"dev"},"metrics":["ndcg","map"]}
-{"name":"SQA Quote Retrieval","type":"binary_retrieval","data":{"source":"sqa","split":"dev"},"metrics":["ndcg","map"]}
+{"name":"PF Quote Retrieval","type":"binary_retrieval","data":{"source":"pf","split":"dev"},"metrics":["ndcg","map","recall_5","recall_10","auc"]}
+{"name":"SQA Quote Retrieval","type":"binary_retrieval","data":{"source":"sqa","split":"dev"},"metrics":["ndcg","map","recall_5","recall_10","auc"]}
