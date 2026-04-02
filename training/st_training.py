@@ -230,7 +230,7 @@ def main():
     trainer = SentenceTransformerTrainer(
         model=model,
         args=training_args,
-        train_dataset=train_datasets,
+        train_dataset=DatasetDict(train_datasets),
         eval_dataset=DatasetDict(eval_datasets),
         loss=losses,
     )
