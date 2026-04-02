@@ -1,5 +1,6 @@
 from InstructorEmbedding import INSTRUCTOR
 from transformers import AutoTokenizer
+from evaluation.instructor_new import _get_device
 
 instr_format = "Represent the Science document"
 
@@ -21,5 +22,5 @@ class InstructorModel:
         else:
             instructions = [f"{self.instruction_map['[SRCH]'][b[1]]}{batch[i]}" for i, b in enumerate(batch_ids)]
             batch = [[ins, b] for ins, b in zip(instructions, batch)]
-        batch_embed = self.encoder.encode(batch, convert_to_numpy=False, convert_to_tensor=True, device="cuda")
+        batch_embed = self.encoder.encode(batch, convert_to_numpy=False, convert_to_tensor=True, device=_get_device())
         return batch_embed

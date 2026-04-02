@@ -4,6 +4,7 @@ from transformers import AutoModel, AutoTokenizer
 import os
 import torch
 import logging
+from evaluation.instructor_new import _get_device
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,7 @@ class Model:
         self.variant = variant
         self.encoder = EncoderFactory(base_checkpoint, adapters_load_from, fusion_load_from, all_tasks).get_encoder(
             variant)
-        if torch.cuda.is_available():
-            self.encoder.to('cuda')
+        self.encoder.to(_get_device())
         self.encoder.eval()
         tokenizer_checkpoint = f"{base_checkpoint}/tokenizer" if os.path.isdir(base_checkpoint) else base_checkpoint
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_checkpoint)
@@ -136,14 +136,14 @@ class Model:
             batch = append_ctrl_code(batch, batch_ids)
         input_ids = self.tokenizer(batch, padding=True, truncation=True,
                                    return_tensors="pt", return_token_type_ids=False, max_length=self.max_length)
-        input_ids.to('cuda')
+        input_ids.to(_get_device())
         if self.variant == "default":
             output = self.encoder(**input_ids)
         elif type(self._task_id) != dict:
             output = self.encoder(task_id=self._task_id, **input_ids)
         else:
             x = input_ids["input_ids"]
-            output = torch.zeros(x.shape[0], x.shape[1], self.hidden_dim).to("cuda")
+            output = torch.zeros(x.shape[0], x.shape[1], self.hidden_dim).to(_get_device())
             q_idx = torch.tensor([i for i, b in enumerate(batch_ids) if b[1] == "q"])
             c_idx = torch.tensor([i for i, b in enumerate(batch_ids) if b[1] == "c"])
 

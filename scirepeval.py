@@ -29,17 +29,15 @@ def _get_transformers_version():
 _transformers_version = _get_transformers_version()
 if _transformers_version >= (4, 51):
     # Newer transformers: can use new models
-    from evaluation.instructor_new import GemmaModel, Qwen3Model, GritLMModel, F2LLMModel, Voyage4Model, load_prompts_from_file
+    from evaluation.instructor_new import SentenceTransformerModel, GritLMModel, Voyage4Model, load_prompts_from_file
     InstructorModel = None
     NEW_MODELS_AVAILABLE = True
 else:
     # Older transformers: only legacy INSTRUCTOR
     from evaluation.instructor import InstructorModel
     NEW_MODELS_AVAILABLE = False
-    GemmaModel = None
-    Qwen3Model = None
+    SentenceTransformerModel = None
     GritLMModel = None
-    F2LLMModel = None
     Voyage4Model = None
 
 from reviewer_matching import ReviewerMatchingEvaluator
@@ -50,7 +48,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 TASK_IDS = {"classification": "[CLF]", "regression": "[RGN]", "proximity": "[PRX]",
             "adhoc_search": {"query": "[QRY]", "candidates": "[PRX]"},
             "binary_retrieval": {"query": "[QRY]", "candidates": "[PRX]"}}
-model_class_map = {"gemma": GemmaModel, "qwen3": Qwen3Model, "gritlm": GritLMModel, "f2llm": F2LLMModel, "voyage4": Voyage4Model}
 
 import pytorch_lightning as pl
 
@@ -60,7 +57,7 @@ pl.seed_everything(42, workers=True)
 class SciRepEval:
 
     def __init__(self, tasks_config: str = "scirepeval_tasks.jsonl", task_list: List[str] = None,
-                 task_formats: List[str] = None, batch_size: int = 32, embedding_save_path = None, excluded_tasks: List[str] = None, task_specific_prompts: bool = False, s3_base_path: str = None):
+                 task_formats: List[str] = None, batch_size: int = 32, embedding_save_path = None, excluded_tasks: List[str] = None, task_specific_prompts: bool = False, s3_base_path: str = None, max_samples: int = None):
         tasks_dict = dict()
         task_by_formats = dict()
         with open(tasks_config, encoding="utf-8") as f:
@@ -83,6 +80,7 @@ class SciRepEval:
         self.embedding_save_path = embedding_save_path
         self.task_specifc_prompts = task_specific_prompts
         self.s3_base_path = s3_base_path
+        self.max_samples = max_samples
 
     def evaluate(self, model: Union[Model, List[Model]], output: str):
         final_results = dict()
@@ -155,6 +153,7 @@ class SciRepEval:
                             metrics=kwargs["metrics"],
                             batch_size=kwargs["batch_size"],
                             fields=kwargs.get("fields"),
+                            max_samples=self.max_samples,
                         )
                     elif task_name == "Paper-Reviewer Matching":
                         if not task_data.get("reviewers") and not task_data.get("hf_reviewers"):
@@ -219,8 +218,13 @@ if __name__ == "__main__":
     parser.add_argument('--task-specific-prompts', action='store_true')
     # Voyage4 API-specific arguments
     parser.add_argument('--voyage-api', action='store_true', default=False, help='Use Voyage API for docs (local nano for queries). Requires VOYAGE_API_KEY env var')
-    parser.add_argument('--truncate-dim', type=int, default=1024, help='Embedding truncation dimension for instructor models that support it (e.g. qwen3)')
+    parser.add_argument('--truncate-dim', type=int, default=None, help='Embedding truncation dimension for instructor models that support it (e.g. qwen3)')
     parser.add_argument('--s3-base-path', type=str, default=None, help='S3 base path for binary_retrieval tasks (e.g. s3://bucket/prefix/). pf/sqa sub-paths are appended automatically.')
+    parser.add_argument('--max-samples', type=int, default=None, help='Cap number of queries for binary_retrieval tasks (useful for quick tests).')
+    parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Pass trust_remote_code=True to SentenceTransformer')
+    parser.add_argument('--prompt-name-map', type=json.loads, default=None, help='JSON mapping of task IDs to model preset prompt names, e.g. \'{"[CLF]": "Classification", "[SRCH]": {"q": "Retrieval-query", "c": "Retrieval-document"}}\'')
+
+    parser.add_argument('--max-seq-length', type=int, default=512, help='Override encoder max_seq_length')
 
     args = parser.parse_args()
     adapters_load_from = args.adapters_dir if args.adapters_dir else args.adapters_chkpt
@@ -230,18 +234,33 @@ if __name__ == "__main__":
         if args.model_type == "instr":
             model = InstructorModel(args.model)
         elif args.model_type == "voyage4":
-            # Voyage4 uses built-in prompts, doesn't need prompt file
-            model = model_class_map[args.model_type](
+            model = Voyage4Model(
                 args.model,
                 ckpt_path=args.checkpoint,
                 use_api=args.voyage_api,
-                truncate_dim=args.truncate_dim,
+                truncate_dim=args.truncate_dim or 1024,
             )
-        else:
+        elif args.model_type == "gritlm":
             if not args.prompt_file or not os.path.exists(args.prompt_file):
-                raise ValueError("Instructor model requires JSON file with prompts to use.")
+                raise ValueError("GritLM requires a prompt file.")
             task_prompts = load_prompts_from_file(args.prompt_file, args.prompt_name)
-            model = model_class_map[args.model_type](args.model, task_prompts, ckpt_path=args.checkpoint, truncate_dim=args.truncate_dim)
+            model = GritLMModel(args.model, task_prompts, ckpt_path=args.checkpoint)
+        else:
+            if args.prompt_name_map:
+                task_prompts = None
+            elif args.prompt_file and os.path.exists(args.prompt_file):
+                task_prompts = load_prompts_from_file(args.prompt_file, args.prompt_name)
+            else:
+                raise ValueError("Provide either --prompt-file or --prompt-name-map.")
+            model = SentenceTransformerModel(
+                args.model,
+                task_prompts=task_prompts,
+                prompt_name_map=args.prompt_name_map,
+                ckpt_path=args.checkpoint,
+                truncate_dim=args.truncate_dim,
+                trust_remote_code=args.trust_remote_code,
+                max_seq_length=args.max_seq_length,
+            )
     else:
         model = Model(
             variant=args.mtype,
@@ -254,5 +273,5 @@ if __name__ == "__main__":
             pooling_mode=args.pooling_mode,
             use_fp16=args.fp16
         )
-    evaluator = SciRepEval(tasks_config=args.tasks_config, batch_size=args.batch_size, embedding_save_path=args.embeddings_save_path, excluded_tasks=args.excluded_tasks, task_formats=args.task_formats, task_list=args.task_list, task_specific_prompts=args.task_specific_prompts, s3_base_path=args.s3_base_path)
+    evaluator = SciRepEval(tasks_config=args.tasks_config, batch_size=args.batch_size, embedding_save_path=args.embeddings_save_path, excluded_tasks=args.excluded_tasks, task_formats=args.task_formats, task_list=args.task_list, task_specific_prompts=args.task_specific_prompts, s3_base_path=args.s3_base_path, max_samples=args.max_samples)
     evaluator.evaluate(model, args.output)

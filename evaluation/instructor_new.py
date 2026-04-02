@@ -1,14 +1,21 @@
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer
 import torch
+
+def _get_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 from typing import List, Optional, Dict, Union
 from abc import ABC, abstractmethod
 import importlib.metadata
 import warnings
-from string import Formatter
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 from copy import deepcopy
-from training import schedulers
-from training.schedulers import InverseSquareRootSchedule, InverseSquareRootScheduleConfig
 
 # Lazy import for optional dependencies
 try:
@@ -194,219 +201,188 @@ def load_prompts_from_file(file_path: str, prompt_name: str) -> Dict:
     return load_prompts(prompts_data, prompt_name)
 
 
-class PromptFormatter:
-
-    def __init__(self, task_prompts: Dict[str, str]):
-        self.task_prompts = task_prompts
-
-    def _parse_title_content(self, text: str, sep_token: str) -> tuple:
-        parts = text.split(sep_token)
-        if len(parts) >= 2:
-            return parts[0].strip(), parts[1].strip()
-        return parts[0].strip(), ""
-
-    def _get_template_fields(self, prompt: str) -> List[str]:
-        return [field_name for _, field_name, _, _ in Formatter().parse(prompt) if field_name]
-
-    def _format_with_fields(self, prompt: str, text: str, sep_token: str = None) -> str:
-        field_names = self._get_template_fields(prompt)
-
-        if TITLE_FIELD in field_names and sep_token:
-            title, content = self._parse_title_content(text, sep_token)
-            return prompt.format(**{TITLE_FIELD: title, CONTENT_FIELD: content})
-        else:
-            return prompt.format(**{CONTENT_FIELD: text})
-
-    def format_batch(self, batch: List[str], task_id: Union[str, dict], task_name: str = None,
-                     batch_ids: Optional[List] = None, sep_token: str = None,
-                     use_field_formatting: bool = True) -> List[str]:
-        formatted_batch = []
-        is_search_task = isinstance(task_id, dict)
-
-        if not is_search_task:
-            prompt = self.task_prompts[task_name] if task_name else self.task_prompts[task_id]
-
-            if use_field_formatting:
-                formatted_batch = [self._format_with_fields(prompt, text, sep_token) for text in batch]
-            else:
-                formatted_batch = [f"{prompt}{text}" for text in batch]
-        else:
-            for i, (_, batch_type) in enumerate(batch_ids):
-                if task_name:
-                    prompt = self.task_prompts[task_name][batch_type]
-                else:
-                    prompt = self.task_prompts[SEARCH_TASK_ID][batch_type]
-
-                if use_field_formatting:
-                    formatted_batch.append(self._format_with_fields(prompt, batch[i], sep_token))
-                else:
-                    formatted_batch.append(prompt.format(**{CONTENT_FIELD: batch[i]}))
-
-        return formatted_batch
-
 
 class InstructorEmbeddingModel(ABC):
 
-    def __init__(self, embed_model: str, model_type: str, task_prompts: Dict[str, str], eos_token: str = None, ckpt_path = None):
+    def __init__(self, embed_model: str, model_type: str, task_prompts: Dict[str, str]):
         is_compatible, error_msg = _check_version_compatibility(model_type)
         if not is_compatible:
             raise ValueError(error_msg)
 
         self.embed_model = embed_model
         self.task_prompts = task_prompts
-        self.task_id = None
+        self._task_id = None
         self.task_name = None
-        self.formatter = None
+
+    @property
+    def task_id(self):
+        return self._task_id
+
+    @task_id.setter
+    def task_id(self, value):
+        self._task_id = value
+        if value is not None:
+            self._log_prompts(value)
+
+    def _log_prompts(self, task_id):
+        pass
 
     def _setup_tokenizer_sep_token(self, tokenizer):
         if hasattr(tokenizer, 'eos_token'):
             tokenizer.sep_token = tokenizer.eos_token
 
-    def _replace_sep_placeholder(self, batch: List[str]) -> List[str]:
-        if not hasattr(self, 'tokenizer') or not hasattr(self.tokenizer, 'sep_token'):
-            return batch
-
-        sep_token = self.tokenizer.sep_token
-        if sep_token == BERT_STYLE_SEP_TOKEN:
-            return batch
-
-        return [text.replace(BERT_STYLE_SEP_TOKEN, sep_token)
-                if BERT_STYLE_SEP_TOKEN in text else text
-                for text in batch]
-
     @abstractmethod
     def _encode_batch(self, formatted_batch: List[str]) -> torch.Tensor:
         pass
 
-    def _get_sep_token(self) -> str:
-        if hasattr(self, 'tokenizer') and hasattr(self.tokenizer, 'sep_token'):
-            return self.tokenizer.sep_token
-        return None
 
+class SentenceTransformerModel(InstructorEmbeddingModel):
+    """
+    Unified wrapper for SentenceTransformer-compatible embedding models.
 
-class GemmaModel(InstructorEmbeddingModel):
+    Passes prompts via the `prompt=` kwarg on encoder.encode(), which is the
+    recommended approach for all ST-compatible models (Gemma, Qwen3, F2LLM,
+    Harrier, Jina, etc.). This matches how these models are trained.
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None, **kwargs):
-        super().__init__(embed_model, "gemma", task_prompts)
+    For search tasks, only queries receive a prompt; documents are encoded with
+    no prompt. For non-search tasks, all items receive the task prompt.
 
-        self.encoder = SentenceTransformer(self.embed_model)
-        self.tokenizer = self.encoder.tokenizer
-        self._setup_tokenizer_sep_token(self.tokenizer)
-        self.formatter = PromptFormatter(task_prompts)
+    task_prompts format (after load_prompts_from_file resolves inheritance):
+        {
+            "[CLF]": "task: classification | query: ",
+            "[RGN]": "task: clustering | query: ",
+            "[PRX]": "task: sentence similarity | query: ",
+            "[SRCH]": {"q": "task: search result | query: ", "c": ""},
+        }
+    Prompt strings are plain prefixes — ST appends the text automatically.
 
-    def _encode_batch(self, formatted_batch: List[str]) -> torch.Tensor:
-        return self.encoder.encode(formatted_batch, convert_to_tensor=True,device="cuda")
+    Alternatively, use prompt_name_map to use named presets baked into the model's
+    ST config (recommended for models like Gemma, Harrier that define them):
+        {
+            "[CLF]": "Classification",
+            "[PRX]": "STS",
+            "[SRCH]": {"q": "Retrieval-query", "c": "Retrieval-document"},
+        }
+    task_prompts and prompt_name_map are mutually exclusive.
 
-    def __call__(self, batch: List[str], batch_ids: Optional[List] = None):
-        formatted_batch = self.formatter.format_batch(
-            batch=batch,
-            task_id=self.task_id,
-            task_name=self.task_name,
-            batch_ids=batch_ids,
-            sep_token=self._get_sep_token(),
-            use_field_formatting=True
-        )
-        return self._encode_batch(formatted_batch)
+    Args:
+        embed_model: HuggingFace model name or path.
+        task_prompts: Task prompt prefix strings keyed by task ID.
+        prompt_name_map: Task ID -> preset name(s) from the model's ST config.
+        ckpt_path: Optional path to a PyTorch checkpoint file or DeepSpeed ZeRO directory.
+        truncate_dim: Truncate embeddings to this dimension (passed to SentenceTransformer).
+        trust_remote_code: Pass trust_remote_code=True to SentenceTransformer.
+        max_seq_length: Override the encoder's max_seq_length after loading.
+    """
 
+    def __init__(
+        self,
+        embed_model: str,
+        task_prompts: Dict[str, str] = None,
+        prompt_name_map: Dict[str, Union[str, dict]] = None,
+        ckpt_path: str = None,
+        truncate_dim: int = None,
+        trust_remote_code: bool = False,
+        max_seq_length: int = None,
+    ):
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            raise ImportError(
+                "SentenceTransformerModel requires sentence-transformers. "
+                "Please install: pip install sentence-transformers"
+            )
+        if task_prompts and prompt_name_map:
+            raise ValueError("Specify either task_prompts or prompt_name_map, not both.")
+        super().__init__(embed_model, "sentence_transformer", task_prompts or {})
 
-class Qwen3Model(InstructorEmbeddingModel):
+        self.device = _get_device()
+        self.prompt_name_map = prompt_name_map or {}
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None, truncate_dim: int = 1024):
-        super().__init__(embed_model, "qwen3", task_prompts)
+        st_kwargs = {}
+        if truncate_dim is not None:
+            st_kwargs["truncate_dim"] = truncate_dim
+        if trust_remote_code:
+            st_kwargs["trust_remote_code"] = True
 
-        self.encoder = SentenceTransformer(embed_model, truncate_dim=truncate_dim)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.embed_model)
+        self.encoder = SentenceTransformer(embed_model, **st_kwargs)
+
+        if max_seq_length is not None:
+            self.encoder.max_seq_length = max_seq_length
 
         if ckpt_path:
-            import torch
             import os
             if os.path.isdir(ckpt_path):
                 from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
                 state_dict = get_fp32_state_dict_from_zero_checkpoint(ckpt_path)
-                # Keys are like 'encoder.auto_model.layers...' depending on your LightningModule layout
                 encoder_state = {k.replace('encoder.', ''): v for k, v in state_dict.items() if k.startswith('encoder.')}
                 self.encoder[0].auto_model.load_state_dict(encoder_state)
             else:
-                checkpoint = torch.load(ckpt_path, map_location='cuda', weights_only=False)
-                # Only extract encoder state_dict - ignore scheduler and other training state
+                checkpoint = torch.load(ckpt_path, map_location=self.device, weights_only=False)
                 encoder_state = {k.replace('encoder.', ''): v for k, v in checkpoint['state_dict'].items() if k.startswith('encoder.')}
                 self.encoder[0].auto_model.load_state_dict(encoder_state)
-            
-        self.encoder.max_seq_length = 512
+
+        self.tokenizer = self.encoder.tokenizer
         self._setup_tokenizer_sep_token(self.tokenizer)
-        self.formatter = PromptFormatter(task_prompts)
+
+    def _log_prompts(self, task_id):
+        key = self.task_name or (SEARCH_TASK_ID if isinstance(task_id, dict) else task_id)
+        if isinstance(task_id, dict):
+            prompts = {t: self._get_encode_kwargs(t) for t in (QUERY_TYPE, CANDIDATE_TYPE)}
+        else:
+            prompts = self._get_encode_kwargs()
+        logger.info(f"Prompts for task {key!r}: {prompts}")
 
     def _encode_batch(self, formatted_batch: List[str]) -> torch.Tensor:
-        return self.encoder.encode(sentences=formatted_batch, convert_to_tensor=True, device="cuda")
+        return self.encoder.encode(formatted_batch, convert_to_tensor=True, device=self.device)
+
+    def _get_encode_kwargs(self, batch_type: str = None) -> dict:
+        """Return prompt kwargs for encoder.encode() for the current task and batch_type."""
+        # For search tasks (task_id is a dict), use task_name if set, else fall back to [SRCH]
+        key = self.task_name or (SEARCH_TASK_ID if isinstance(self.task_id, dict) else self.task_id)
+
+        if self.prompt_name_map and key is not None:
+            entry = self.prompt_name_map.get(key)
+            if entry is not None:
+                name = entry.get(batch_type or QUERY_TYPE) if isinstance(entry, dict) else entry
+                if name:
+                    return {"prompt_name": name}
+            return {}
+
+        if self.task_prompts and key is not None:
+            entry = self.task_prompts.get(key)
+            if entry is not None:
+                p = entry.get(batch_type or QUERY_TYPE, "") if isinstance(entry, dict) else entry
+                if p:
+                    return {"prompt": p}
+        return {}
 
     def __call__(self, batch: List[str], batch_ids: Optional[List] = None):
-        batch = self._replace_sep_placeholder(batch)
+        is_search_task = isinstance(self.task_id, dict)
 
-        formatted_batch = self.formatter.format_batch(
-            batch=batch,
-            task_id=self.task_id,
-            task_name=self.task_name,
-            batch_ids=batch_ids,
-            sep_token=self._get_sep_token(),
-            use_field_formatting=True
-        )
-        return self._encode_batch(formatted_batch)
+        if not is_search_task:
+            return self.encoder.encode(batch, convert_to_tensor=True, device=self.device,
+                                       **self._get_encode_kwargs())
 
+        # Search task: queries get a prompt, documents get none
+        query_texts, query_indices, doc_texts, doc_indices = [], [], [], []
+        for i, (_, batch_type) in enumerate(batch_ids):
+            if batch_type == QUERY_TYPE:
+                query_texts.append(batch[i])
+                query_indices.append(i)
+            else:
+                doc_texts.append(batch[i])
+                doc_indices.append(i)
 
-class F2LLMModel(InstructorEmbeddingModel):
+        embeddings = [None] * len(batch)
+        if query_texts:
+            for idx, emb in zip(query_indices, self.encoder.encode(query_texts, convert_to_tensor=True, device=self.device,
+                                                                    **self._get_encode_kwargs(QUERY_TYPE))):
+                embeddings[idx] = emb
+        if doc_texts:
+            for idx, emb in zip(doc_indices, self.encoder.encode(doc_texts, convert_to_tensor=True, device=self.device,
+                                                                   **self._get_encode_kwargs(CANDIDATE_TYPE))):
+                embeddings[idx] = emb
+        return torch.stack(embeddings)
 
-    def __init__(self, embed_model: str, task_prompts: Dict[str, str], ckpt_path: str = None, **kwargs):
-        super().__init__(embed_model, "f2llm", task_prompts)
-
-        # Load model and tokenizer using transformers
-        self.model = AutoModel.from_pretrained(embed_model).cuda()
-        self.tokenizer = AutoTokenizer.from_pretrained(embed_model)
-        self._setup_tokenizer_sep_token(self.tokenizer)
-        self.formatter = PromptFormatter(task_prompts)
-
-    def _encode_batch(self, formatted_batch: List[str]) -> torch.Tensor:
-        """
-        Encode a batch of sentences using F2LLM's custom encoding strategy.
-        """
-        # Append EOS token to each sentence
-        sentences_with_eos = [s + self.tokenizer.eos_token for s in formatted_batch]
-
-        # Tokenize
-        tokenized_inputs = self.tokenizer(
-            sentences_with_eos,
-            padding=True,
-            return_tensors='pt',
-            add_special_tokens=False
-        ).to("cuda")
-
-        # Get last hidden state
-        with torch.no_grad():
-            last_hidden_state = self.model(**tokenized_inputs).last_hidden_state
-
-        # Extract embeddings from the final token position (EOS position)
-        eos_positions = tokenized_inputs.attention_mask.sum(dim=1) - 1
-        embeddings = last_hidden_state[
-            torch.arange(len(sentences_with_eos), device="cuda"),
-            eos_positions
-        ]
-
-        # L2 normalization
-        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-
-        return embeddings
-
-    def __call__(self, batch: List[str], batch_ids: Optional[List] = None):
-        batch = self._replace_sep_placeholder(batch)
-
-        formatted_batch = self.formatter.format_batch(
-            batch=batch,
-            task_id=self.task_id,
-            task_name=self.task_name,
-            batch_ids=batch_ids,
-            sep_token=self._get_sep_token(),
-            use_field_formatting=True
-        )
-        return self._encode_batch(formatted_batch)
 
 
 VOYAGE4_NANO_MODEL = "voyageai/voyage-4-nano"
@@ -416,17 +392,15 @@ class Voyage4Model(InstructorEmbeddingModel):
     """
     Voyage4 model wrapper supporting both local (SentenceTransformer) and API modes.
 
-    Note: This is NOT an instruction-following model like Qwen3/Gemma.
-    It uses built-in prompts via encode_query() and encode_document() methods.
-    The task_prompts parameter is ignored - Voyage4 uses its own internal prompts.
+    Local mode delegates to SentenceTransformerModel.
+    API mode uses the Voyage API for document encoding and the local nano model for queries.
 
     Args:
-        embed_model: Model name. For local mode, this is a HuggingFace model path.
-                     For API mode, this is a Voyage model name (e.g., "voyage-3-large").
+        embed_model: HuggingFace model path (local) or Voyage model name (API).
         task_prompts: Ignored - Voyage4 uses its own internal prompts.
-        ckpt_path: Ignored for Voyage4 models.
-        use_api: If True, use the Voyage API for document encoding and local nano model
-                 for query encoding.
+        ckpt_path: Ignored.
+        use_api: If True, use the Voyage API for docs and local nano model for queries.
+        truncate_dim: Embedding truncation dimension.
     """
 
     def __init__(
@@ -437,11 +411,10 @@ class Voyage4Model(InstructorEmbeddingModel):
         use_api: bool = False,
         truncate_dim: int = 1024,
     ):
-        # Note: task_prompts is accepted for API compatibility but not used
         super().__init__(embed_model, "voyage4", task_prompts or {})
 
         self.use_api = use_api
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = _get_device()
 
         if use_api:
             if not VOYAGEAI_AVAILABLE:
@@ -457,50 +430,35 @@ class Voyage4Model(InstructorEmbeddingModel):
                 )
             self.client = voyageai.Client()
             self.doc_model = embed_model
-            # Load local nano model for query encoding
             self.query_encoder = SentenceTransformer(VOYAGE4_NANO_MODEL, trust_remote_code=True, truncate_dim=truncate_dim)
             self.query_encoder.max_seq_length = 512
             self.tokenizer = AutoTokenizer.from_pretrained(f"voyageai/{embed_model}")
         else:
-            if not SENTENCE_TRANSFORMERS_AVAILABLE:
-                raise ImportError(
-                    "Voyage4 local mode requires sentence-transformers to be installed. "
-                    "Please install: pip install sentence-transformers"
-                )
-            self.encoder = SentenceTransformer(embed_model, trust_remote_code=True, truncate_dim=truncate_dim)
-            self.encoder.max_seq_length = 512
-            self.tokenizer = self.encoder.tokenizer
-            self._setup_tokenizer_sep_token(self.tokenizer)
+            self._local = SentenceTransformerModel(
+                embed_model,
+                task_prompts,
+                truncate_dim=truncate_dim,
+                trust_remote_code=True,
+                max_seq_length=512,
+            )
+            self.tokenizer = self._local.tokenizer
 
     def _embed_api(self, texts: List[str]) -> torch.Tensor:
-        """Embed documents using the Voyage API. Retries with 20s wait on rate limit errors."""
-        result = self.client.embed(
-            texts=texts,
-            model=self.doc_model,
-            input_type="document",
-        )
+        result = self.client.embed(texts=texts, model=self.doc_model, input_type="document")
         return torch.tensor(result.embeddings)
 
     def _encode_queries_local(self, texts: List[str]) -> torch.Tensor:
-        """Encode queries using the local nano model."""
         return self.query_encoder.encode_query(texts, convert_to_tensor=True, device=self.device)
 
     def _encode_batch(self, formatted_batch: List[str]) -> torch.Tensor:
-        """Required by parent class but not used directly - see __call__ instead."""
-        # This is only called for non-search tasks in local mode
-        return self.encoder.encode_document(formatted_batch, convert_to_tensor=True, device=self.device)
+        # Only used in API mode for non-search tasks
+        return self._embed_api(formatted_batch)
 
     def _encode_batch_api(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
-        """Encode batch using the Voyage API for docs and local nano model for queries."""
         is_search_task = isinstance(self.task_id, dict)
 
         if is_search_task and batch_ids:
-            # Separate queries and documents for batch processing
-            query_texts = []
-            query_indices = []
-            doc_texts = []
-            doc_indices = []
-
+            query_texts, query_indices, doc_texts, doc_indices = [], [], [], []
             for i, (_, batch_type) in enumerate(batch_ids):
                 if batch_type == QUERY_TYPE:
                     query_texts.append(batch[i])
@@ -509,47 +467,22 @@ class Voyage4Model(InstructorEmbeddingModel):
                     doc_texts.append(batch[i])
                     doc_indices.append(i)
 
-            # Batch encode queries and documents separately
             embeddings = [None] * len(batch)
-
             if query_texts:
-                query_embeddings = self._encode_queries_local(query_texts)
-                for idx, emb in zip(query_indices, query_embeddings):
+                for idx, emb in zip(query_indices, self._encode_queries_local(query_texts)):
                     embeddings[idx] = emb
-
             if doc_texts:
-                doc_embeddings = self._embed_api(doc_texts)
-                for idx, emb in zip(doc_indices, doc_embeddings):
+                for idx, emb in zip(doc_indices, self._embed_api(doc_texts)):
                     embeddings[idx] = emb
-
             return torch.stack(embeddings)
         else:
-            # Non-search task: use document encoding for all
             return self._embed_api(batch)
-
-    def _encode_batch_local(self, batch: List[str], batch_ids: Optional[List] = None) -> torch.Tensor:
-        """Encode batch using local SentenceTransformer with built-in query/document prompts."""
-        is_search_task = isinstance(self.task_id, dict)
-
-        if is_search_task and batch_ids:
-            # Mixed batch: queries and documents
-            embeddings = []
-            for i, (_, batch_type) in enumerate(batch_ids):
-                text = batch[i]
-                if batch_type == QUERY_TYPE:
-                    emb = self.encoder.encode_query(text, convert_to_tensor=True, device=self.device)
-                else:
-                    emb = self.encoder.encode_document(text, convert_to_tensor=True, device=self.device)
-                embeddings.append(emb)
-            return torch.stack(embeddings)
-        else:
-            # Single type batch: use encode_document for all
-            return self.encoder.encode_document(batch, convert_to_tensor=True, device=self.device)
 
     def __call__(self, batch: List[str], batch_ids: Optional[List] = None):
         if not self.use_api:
-            batch = self._replace_sep_placeholder(batch)
-            return self._encode_batch_local(batch, batch_ids)
+            self._local.task_id = self.task_id
+            self._local.task_name = self.task_name
+            return self._local(batch, batch_ids)
         else:
             return self._encode_batch_api(batch, batch_ids)
 
@@ -575,6 +508,16 @@ class GritLMModel(InstructorEmbeddingModel):
             return f"<|user|>\n{instruction}\n<|embed|>\n"
         else:
             return "<|embed|>\n"
+
+    def _log_prompts(self, task_id):
+        is_search_task = isinstance(task_id, dict)
+        if is_search_task:
+            q = self._gritlm_instruction(self.task_prompts.get(SEARCH_TASK_ID, {}).get(QUERY_TYPE, ''))
+            c = self._gritlm_instruction("")
+            logger.info(f"Prompts for task {SEARCH_TASK_ID!r}: query={q!r}, candidate={c!r}")
+        else:
+            instruction = self._gritlm_instruction(self.task_prompts.get(task_id, ""))
+            logger.info(f"Prompt for task {task_id!r}: {instruction!r}")
 
     def _encode_batch(self, formatted_batch: List[str]) -> torch.Tensor:
         embeddings = self.encoder.encode(formatted_batch, convert_to_tensor=True)

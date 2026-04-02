@@ -96,7 +96,7 @@ class ParquetBinaryDataset(IRDataset):
     Rows are grouped by task_id to reconstruct per-query candidate lists.
     """
 
-    def __init__(self, data_path: str, sep_token: str, batch_size=32, fields=None, key=None, processing_fn=None):
+    def __init__(self, data_path: str, sep_token: str, batch_size=32, fields=None, key=None, processing_fn=None, max_samples: int = None):
         # Skip SimpleDataset.__init__ — we build queries/candidates directly from Parquet rows
         self.batch_size = batch_size
         self.sep_token = sep_token
@@ -117,18 +117,24 @@ class ParquetBinaryDataset(IRDataset):
 
         self.queries = []
         self.candidates = []
+        self.qrels = {}
 
         for row in raw:
             task_id = str(row["task_id"])
             example_id = str(row["example_id"])
 
             if task_id not in seen_queries:
+                if max_samples is not None and len(seen_queries) >= max_samples:
+                    continue
                 seen_queries[task_id] = row["query"]
                 self.queries.append({"query": row["query"], "doc_id": task_id})
+                self.qrels[task_id] = {}
 
-            if example_id not in seen_candidates:
-                seen_candidates.add(example_id)
-                self.candidates.append({"quote": row["quote_text"], "doc_id": example_id})
+            if task_id in seen_queries:
+                self.qrels[task_id][example_id] = 1 if row["label"] == "positive" else 0
+                if example_id not in seen_candidates:
+                    seen_candidates.add(example_id)
+                    self.candidates.append({"quote": row["quote_text"], "doc_id": example_id})
 
         logger.info(f"Built {len(self.queries)} queries and {len(self.candidates)} candidates")
 

@@ -1,6 +1,7 @@
 from typing import Dict, List, Union
 
 from evaluation.encoders import Model
+from evaluation.instructor_new import _get_device
 from tqdm import tqdm
 import numpy as np
 import json
@@ -32,7 +33,8 @@ class EmbeddingsGenerator:
                             results[paper_id] += embedding.detach().cpu().numpy()
                     del batch
                     del emb
-                    torch.cuda.empty_cache()
+                    if _get_device() == "cuda":
+                        torch.cuda.empty_cache()
             results = {k: v/len(self.models) for k, v in results.items()}
         except Exception as e:
             logger.error("Exception in generating embeddings", exc_info=e)
