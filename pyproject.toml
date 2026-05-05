@@ -15,6 +15,7 @@ dependencies = [
     "cython>=3.0.0",
     "datasets==2.19.0",
     "dill>=0.3.5",
+    "einops>=0.8.2",
     "filelock>=3.8.0",
     "fsspec>=2023.5.0",
     "gritlm==1.0.2",

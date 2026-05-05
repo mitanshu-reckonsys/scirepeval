@@ -72,6 +72,8 @@ dill==0.3.8
     #   multiprocess
 distro==1.9.0
     # via openai
+einops==0.8.2
+    # via scirepeval (pyproject.toml)
 filelock==3.25.2
     # via
     #   scirepeval (pyproject.toml)
