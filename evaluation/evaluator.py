@@ -30,7 +30,7 @@ import datasets
 import os
 from enum import Enum
 from sklearn.metrics.pairwise import euclidean_distances
-import pytrec_eval_mitanshu
+import pytrec_eval
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -200,12 +200,12 @@ class IREvaluator(Evaluator):
         return pairs
 
     def calc_metrics(self, qrels, run):
-        evaluator = pytrec_eval_mitanshu.RelevanceEvaluator(qrels, set(self.metrics))
+        evaluator = pytrec_eval.RelevanceEvaluator(qrels, set(self.metrics))
         results = evaluator.evaluate(run)
 
         metric_values = {}
         for measure in sorted(self.metrics):
-            res = pytrec_eval_mitanshu.compute_aggregated_measure(
+            res = pytrec_eval.compute_aggregated_measure(
                 measure,
                 [query_measures[measure] for query_measures in results.values()]
             )
