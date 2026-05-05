@@ -303,7 +303,7 @@ python-dateutil==2.9.0.post0
     #   pandas
 pytorch-lightning==2.6.1
     # via scirepeval (pyproject.toml)
-pytrec-eval==0.5
+pytrec-eval-mitanshu==0.5
     # via scirepeval (pyproject.toml)
 pytrec-eval-terrier==0.5.10
     # via mteb

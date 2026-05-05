@@ -2022,10 +2022,15 @@ wheels = [
 ]
 
 [[package]]
-name = "pytrec-eval"
+name = "pytrec-eval-mitanshu"
 version = "0.5"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2e/03/e6e84df6a7c1265579ab26bbe30ff7f8c22745aa77e0799bba471c0a3a19/pytrec_eval-0.5.tar.gz", hash = "sha256:d9eb4616e7d6b73bf1b5ba4c2c4916e88124e790b53fd61610c30158999e7bde", size = 15248, upload-time = "2020-09-07T18:31:57.186Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/53/4c937ea95e175dd14a0ff302290a95699e5ac96eba6edd9245ceaec6f86f/pytrec_eval_mitanshu-0.5-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:0991bbfadbd47cdff0ca76c2617af08f16aedfeda1a63cada11641c3beeeb6a9", size = 315676, upload-time = "2026-05-05T05:15:27.896Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/5c/e95f3ad9eb35510697b9521f61051e33d9d7fc2ece57c10c4cd1ee60f8fb/pytrec_eval_mitanshu-0.5-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:069c5b2116f3d3e0807b24268fabc712e7eb7300271407f1c80448cfdab0b769", size = 314948, upload-time = "2026-05-05T05:19:16.97Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/18/902802dd72d8e64b03195b11ca1c801bdbd21795407a89b97305c8ee156d/pytrec_eval_mitanshu-0.5-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:30439e55203a3f6e530b28763a4f8b8fe7c7f2654e75eb0d6da6011ea0a40260", size = 314975, upload-time = "2026-05-05T05:19:58.741Z" },
+    { url = "https://files.pythonhosted.org/packages/71/e6/ecf05d3a95852502474aeabfaa231d4ae57c31bfeb8e3ef59a0631a056fb/pytrec_eval_mitanshu-0.5-cp314-cp314-manylinux_2_34_x86_64.whl", hash = "sha256:d69c334070450d8c5832cc00895619157979717128d58158c06bec737919dfa0", size = 316307, upload-time = "2026-05-04T12:41:49.666Z" },
+]
 
 [[package]]
 name = "pytrec-eval-terrier"
@@ -2500,7 +2505,7 @@ dependencies = [
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pytorch-lightning" },
-    { name = "pytrec-eval" },
+    { name = "pytrec-eval-mitanshu" },
     { name = "pyyaml" },
     { name = "regex" },
     { name = "requests" },
@@ -2561,7 +2566,7 @@ requires-dist = [
     { name = "protobuf", specifier = ">=3.20.2,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<5.0.0" },
     { name = "pyarrow", specifier = "==12.0.1" },
     { name = "pytorch-lightning", specifier = ">=2.0.0" },
-    { name = "pytrec-eval", specifier = "==0.5" },
+    { name = "pytrec-eval-mitanshu", specifier = ">=0.5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "regex", specifier = ">=2022.8.17" },
     { name = "requests", specifier = ">=2.28.1" },
