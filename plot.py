@@ -24,13 +24,20 @@ def name_to_ndcg(file: str) -> float:
 model_names = [
     name.split("_")[-1].replace(".json", "") for name in list(results.keys())
 ]
-model_parameters = [parameter * 5 for parameter in list(results.values())]
+model_parameters = [parameter * 10 for parameter in list(results.values())]
 model_results = [name_to_ndcg(file) for file in list(results.keys())]
 
 fig = plt.figure(figsize=(20, 10), dpi=150)
+plt.grid() # color="0.95"
 
-plt.scatter(model_names, model_results, s=model_parameters)
-
+plt.scatter(
+    model_names,
+    model_results,
+    s=model_parameters,
+    c=model_parameters,
+    cmap="jet",
+    # alpha=0.95,
+)
 plt.xlabel("Model Name")
 plt.ylabel("nDCG")
 plt.title("Model Performance on SciRepEval (Bubble Size = Parameters)")
